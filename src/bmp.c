@@ -81,7 +81,7 @@ static void drawLine_old(u16 x1, u16 y1, s16 dx, s16 dy, s16 step_x, s16 step_y,
 static HINTERRUPT_CALLBACK hint();
 
 
-void BMP_init(u16 double_buffer, VDPPlane plane, u16 palette, u16 priority)
+NO_INLINE void BMP_init(u16 double_buffer, VDPPlane plane, u16 palette, u16 priority)
 {
     flag = (double_buffer) ? BMP_FLAG_DOUBLEBUFFER : 0;
     bmp_plan = plane;
@@ -110,7 +110,7 @@ void BMP_init(u16 double_buffer, VDPPlane plane, u16 palette, u16 priority)
     BMP_reset();
 }
 
-void BMP_end()
+NO_INLINE void BMP_end()
 {
     // cancel interrupt processing
     SYS_setHIntCallback(NULL);
@@ -153,7 +153,7 @@ void BMP_end()
 //    SYS_enableInts();
 }
 
-void BMP_reset()
+NO_INLINE void BMP_reset()
 {
     // cancel bitmap interrupt processing
     SYS_setHIntCallback(NULL);
@@ -261,7 +261,7 @@ void BMP_waitFlipComplete()
 }
 
 
-u16 BMP_flip(u16 async)
+NO_INLINE u16 BMP_flip(u16 async)
 {
     // wait until pending flip is processed
     BMP_waitWhileFlipRequestPending();
@@ -306,24 +306,23 @@ void BMP_clearTextLine(u16 y)
 }
 
 
-void BMP_showFPS(u16 float_display)
+void BMP_showFPS(u16 float_display, u16 x, u16 y)
 {
     char str[16];
-    const u16 y = GET_YOFFSET + 1;
+    y = GET_YOFFSET + y;
 
     if (float_display)
     {
         fix32ToStr(SYS_getFPSAsFloat(), str, 1);
-        VDP_clearTextBG(bmp_plan, 2, y, 5);
+        // display FPS
+        VDP_drawTextBGFill(bmp_plan, str, x, y, 4);
     }
     else
     {
         uintToStr(SYS_getFPS(), str, 1);
-        VDP_clearTextBG(bmp_plan, 2, y, 2);
+        // display FPS
+        VDP_drawTextBGFill(bmp_plan, str, x, y, 2);
     }
-
-    // display FPS
-    VDP_drawTextBG(bmp_plan, str, 1, y);
 }
 
 
@@ -1069,7 +1068,7 @@ void BMP_drawLine_old(Line *l)
 //}
 
 
-void BMP_drawBitmapData(const u8 *image, u16 x, u16 y, u16 w, u16 h, u32 pitch)
+NO_INLINE void BMP_drawBitmapData(const u8 *image, u16 x, u16 y, u16 w, u16 h, u32 pitch)
 {
     // pixel out screen ?
     if ((x >= BMP_WIDTH) || (y >= BMP_HEIGHT))
@@ -1098,7 +1097,7 @@ void BMP_drawBitmapData(const u8 *image, u16 x, u16 y, u16 w, u16 h, u32 pitch)
     }
 }
 
-u16 BMP_drawBitmap(const Bitmap *bitmap, u16 x, u16 y, u16 loadpal)
+NO_INLINE bool BMP_drawBitmap(const Bitmap *bitmap, u16 x, u16 y, bool loadpal)
 {
     u16 w, h;
 
@@ -1122,15 +1121,12 @@ u16 BMP_drawBitmap(const Bitmap *bitmap, u16 x, u16 y, u16 loadpal)
 
     // load the palette
     if (loadpal)
-    {
-        const Palette *palette = bitmap->palette;
-        PAL_setPaletteColors(pal << 4, palette, CPU);
-    }
+        PAL_setPaletteColors(pal << 4, bitmap->palette, CPU);
 
     return TRUE;
 }
 
-u16 BMP_drawBitmapScaled(const Bitmap *bitmap, u16 x, u16 y, u16 w, u16 h, u16 loadpal)
+NO_INLINE bool BMP_drawBitmapScaled(const Bitmap *bitmap, u16 x, u16 y, u16 w, u16 h, bool loadpal)
 {
     u16 bmp_wb, bmp_h;
 
@@ -1154,37 +1150,14 @@ u16 BMP_drawBitmapScaled(const Bitmap *bitmap, u16 x, u16 y, u16 w, u16 h, u16 l
 
     // load the palette
     if (loadpal)
-    {
-        const Palette *palette = bitmap->palette;
-        PAL_setPaletteColors(pal << 4, palette, CPU);
-    }
+        PAL_setPaletteColors(pal << 4, bitmap->palette, CPU);
 
     return TRUE;
 }
 
-void BMP_loadBitmapData(const u8 *image, u16 x, u16 y, u16 w, u16 h, u32 pitch)
-{
-    BMP_drawBitmapData(image, x, y, w, h, pitch);
-}
-
-void BMP_loadBitmap(const Bitmap *bitmap, u16 x, u16 y, u16 loadpal)
-{
-    BMP_drawBitmap(bitmap, x, y, loadpal);
-}
-
-void BMP_loadAndScaleBitmap(const Bitmap *bitmap, u16 x, u16 y, u16 w, u16 h, u16 loadpal)
-{
-    BMP_drawBitmapScaled(bitmap, x, y, w, h, loadpal);
-}
-
-void BMP_getBitmapPalette(const Bitmap *bitmap, u16 *dest)
-{
-    memcpy(dest, bitmap->palette, 16 * 2);
-}
-
 
 // works only for 8 bits image (x doubled)
-void BMP_scale(const u8 *src_buf, u16 src_wb, u16 src_h, u16 src_pitch, u8 *dst_buf, u16 dst_wb, u16 dst_h, u16 dst_pitch)
+NO_INLINE void BMP_scale(const u8 *src_buf, u16 src_wb, u16 src_h, u16 src_pitch, u8 *dst_buf, u16 dst_wb, u16 dst_h, u16 dst_pitch)
 {
     const s32 yd = mulu(divu(src_h, dst_h), src_wb) - src_wb;
     const u16 yr = modu(src_h, dst_h);
@@ -1285,7 +1258,7 @@ static HINTERRUPT_CALLBACK hint()
 // internals helper methods
 ///////////////////////////
 
-static void initTilemap(u16 index)
+static NO_INLINE void initTilemap(u16 index)
 {
     vu32 *plctrl;
     vu16 *pwdata;
@@ -1310,15 +1283,15 @@ static void initTilemap(u16 index)
     }
 
     // point to vdp port
-    plctrl = (u32 *) GFX_CTRL_PORT;
-    pwdata = (u16 *) GFX_DATA_PORT;
+    plctrl = (u32 *) VDP_CTRL_PORT;
+    pwdata = (u16 *) VDP_DATA_PORT;
 
     i = BMP_TILE_HEIGHT;
 
     while(i--)
     {
         // set destination address for tilemap
-        *plctrl = GFX_WRITE_VRAM_ADDR(addr_tilemap);
+        *plctrl = VDP_WRITE_VRAM_ADDR(addr_tilemap);
 
         // write tilemap line to VDP
         j = BMP_TILE_WIDTH >> 3;
@@ -1428,7 +1401,7 @@ static void doFlip()
     TRANSFER((8 * x) + 6)   \
     TRANSFER((8 * x) + 7)
 
-static u16 doBlit()
+static NO_INLINE u16 doBlit()
 {
     static u16 pos_i;
     vu32 *plctrl;
@@ -1447,7 +1420,7 @@ static u16 doBlit()
         addr_tile = BMP_FB0_ADDR;
 
     /* point to vdp ctrl port */
-    plctrl = (u32 *) GFX_CTRL_PORT;
+    plctrl = (u32 *) VDP_CTRL_PORT;
 
     // previous blit not completed ?
     if (state & BMP_STAT_BLITTING)
@@ -1458,7 +1431,7 @@ static u16 doBlit()
         src += pos_i * (BMP_YPIXPERTILE * (BMP_PITCH / 4));
 
         // set destination address for tile
-        *plctrl = GFX_WRITE_VRAM_ADDR(addr_tile);
+        *plctrl = VDP_WRITE_VRAM_ADDR(addr_tile);
     }
     else
     {
@@ -1467,7 +1440,7 @@ static u16 doBlit()
         pos_i = 0;
 
         // set destination address for tile
-        *plctrl = GFX_WRITE_VRAM_ADDR(addr_tile);
+        *plctrl = VDP_WRITE_VRAM_ADDR(addr_tile);
     }
 
     const u16 remain = BMP_TILE_HEIGHT - pos_i;
@@ -1487,7 +1460,7 @@ static u16 doBlit()
     pos_i += i;
 
     /* point to vdp data port */
-    pldata = (u32 *) GFX_DATA_PORT;
+    pldata = (u32 *) VDP_DATA_PORT;
 
     while(i--)
     {

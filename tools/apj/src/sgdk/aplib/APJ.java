@@ -7,13 +7,12 @@ import java.util.Collections;
 /**
  * aPLib compression is a LZSS based lossless compression algorithm by Jorgen Ibsen - http://www.ibsensoftware.com
  * ApLib packer/unpacker ported in java for SGDK.
- * 
+ *
  * @author Stephane Dallongeville
+ * optimizations by @author Francis Fussiger
  */
-public class APJ
-{
-    static class Match
-    {
+public class APJ {
+    static class Match {
         final private byte[] data;
         private int index;
 
@@ -22,10 +21,9 @@ public class APJ
 
         private int rawCost;
         private int cost;
-        private int saved;
+        private int bestScore;
 
-        public Match(byte[] data, int index, int offset, int length)
-        {
+        public Match(byte[] data, int index, int offset, int length) {
             super();
 
             this.data = data;
@@ -36,22 +34,20 @@ public class APJ
 
             rawCost = -1;
             cost = -1;
-            saved = -1;
+            bestScore = -1;
         }
 
-        public void incLength(int value)
-        {
+        public void incLength(int value) {
             index -= value;
             length += value;
 
-            // need to reset costs and saved
+            // need to reset costs and bestScore
             rawCost = -1;
             cost = -1;
-            saved = -1;
+            bestScore = -1;
         }
 
-        public boolean isShortOrLong()
-        {
+        public boolean isShortOrLong() {
             if ((length >= 2) && (length <= 3) && (offset > 0) && (offset < 128))
                 return true;
             if (length >= 3)
@@ -60,12 +56,10 @@ public class APJ
             return false;
         }
 
-        private int computeRawCost()
-        {
+        private int computeRawCost() {
             int result = 0;
 
-            for (int i = index; i < index + length; i++)
-            {
+            for (int i = index; i < index + length; i++) {
                 if (data[i] == 0)
                     result += 7;
                 else
@@ -75,26 +69,23 @@ public class APJ
             return result;
         }
 
-        private int computeCost()
-        {
+        private int computeCost() {
             if ((length == 1) && (offset > 0) && (offset < 16))
                 return 3 + 4;
 
             if ((length >= 2) && (length <= 3) && (offset > 0) && (offset < 128))
                 return 3 + 8;
-            
+
             if (((length >= 2) && (offset >= 0x80) && (offset < 0x500)) ||
-                ((length >= 3) && (offset >= 0x500) && (offset < 0x7D00)) ||
-                (length >= 4))
-            {
+                    ((length >= 3) && (offset >= 0x500) && (offset < 0x7D00)) ||
+                    (length >= 4)) {
                 int c = 2;
 
                 // can re-use last offset ?
                 if (!wasMatch && (lastOffset == offset))
                     // minimal variable encoding cost
                     c += 2;
-                else
-                {
+                else {
                     // cost for offset high bits (estimation)
                     c += ((getHighBitNum(offset >> 8)) * 2) + 2;
                     // cost for offset low bit
@@ -110,66 +101,74 @@ public class APJ
             return getRawCost();
         }
 
-        private void updateRawCost()
-        {
+        private void updateRawCost() {
             rawCost = computeRawCost();
         }
 
-        private void updateCost()
-        {
+        private void updateCost() {
             cost = computeCost();
         }
 
-        public void updateSaved()
-        {
-            saved = getRawCost() - getCost();
+        public void updateSaved() {
+            bestScore = getRawCost() - getCost();
         }
 
-        public int getRawCost()
-        {
+        public int getRawCost() {
             if (rawCost == -1)
                 updateRawCost();
             return rawCost;
         }
 
-        public int getCost()
-        {
+        public int getCost() {
             if (cost == -1)
                 updateCost();
             return cost;
         }
 
-        public int getSaved()
-        {
-            if (saved == -1)
+        public int getSaved() {
+            if (bestScore == -1)
                 updateSaved();
-            return saved;
+            return bestScore;
         }
 
         @Override
-        public String toString()
-        {
+        public String toString() {
             return "Offset= " + offset + " - Length= " + length;
         }
 
     }
 
     @SuppressWarnings("serial")
-    static class ByteMatchList extends ArrayList<ByteMatch>
-    {
-        ByteMatchList()
-        {
-            super();
+    static final class ByteMatchList {
+        int[] offsets;
+        int[] repeats;
+        int size;
+
+        ByteMatchList(int capacity) {
+            offsets = new int[capacity];
+            repeats = new int[capacity];
+            size = 0;
+        }
+
+        void add(int offset, int repeat) {
+            if (size >= offsets.length) {
+                int newCap = offsets.length * 2;
+
+                offsets = java.util.Arrays.copyOf(offsets, newCap);
+                repeats = java.util.Arrays.copyOf(repeats, newCap);
+            }
+
+            offsets[size] = offset;
+            repeats[size] = repeat;
+            size++;
         }
     }
 
-    static class ByteMatch implements Comparable<ByteMatch>
-    {
+    static final class ByteMatch {
         final int offset;
         final int repeat;
 
-        public ByteMatch(int offset, int repeat)
-        {
+        public ByteMatch(int offset, int repeat) {
             super();
 
             this.offset = offset;
@@ -177,16 +176,11 @@ public class APJ
         }
 
         @Override
-        public String toString()
-        {
+        public String toString() {
             return "Off=" + offset + " - Repeat=" + repeat;
         }
 
-        @Override
-        public int compareTo(ByteMatch bm)
-        {
-            return Integer.compare(offset, bm.offset);
-        }
+
     }
 
     // stats
@@ -204,56 +198,41 @@ public class APJ
     static boolean wasMatch;
     static int lastOffset;
 
-    private static Match findBestMatch(ByteMatchList[] byteMatches, byte[] data, int ind)
-    {
-        // nothing we can do
+    private static Match findBestMatch(ByteMatchList[] byteMatches, byte[] data, int ind) {
         if (ind < 1)
             return null;
 
-        // get byte matches for current byte
         final ByteMatchList bml = byteMatches[data[ind] & 0xFF];
-        // get number of repeat for current byte
         final int curRepeat = getRepeat(data, ind);
 
-        // byte match index
-        int mInd = 0;
+        int mInd = bml.size - 1;
         Match best = null;
-        // minimum save
-        int saved = 1;
+        int bestScore = 0;
 
-        // test all byte matches
-        while (mInd < bml.size())
-        {
-            // get byte match
-            final ByteMatch bm = bml.get(mInd);
+        while (mInd >= 0) {
+            int off = bml.offsets[mInd];
 
-            int off = bm.offset;
-            // raised current offset ? --> stop now
-            if (off >= ind)
-                break;
-
-            int repeat = bm.repeat;
-
-            // less repeat on match
-            if (repeat < curRepeat)
-            {
-                final Match match = new Match(data, ind, ind - off, repeat + 1);
-
-                // we use >= as we always prefer shorter offset
-                if (match.getSaved() >= saved)
-                {
-                    best = match;
-                    saved = match.getSaved();
-                }
+            if (off >= ind) {
+                mInd--;
+                continue;
             }
-            else
-            {
-                // more repeat on match ?
-                if (repeat > curRepeat)
-                {
-                    // bypass extras repeats on match
+
+            int distance = ind - off;
+
+            if (distance > 0x7D00) {
+                mInd--;
+                continue;
+            }
+
+            int repeat = bml.repeats[mInd];
+            Match match;
+
+            if (repeat < curRepeat) {
+                match = new Match(data, ind, distance, repeat + 1);
+            } else {
+                if (repeat > curRepeat) {
                     int delta = repeat - curRepeat;
-                    // fix maximum delta to not raise ind
+
                     if ((off + delta) >= ind)
                         delta = (ind - off) - 1;
 
@@ -261,40 +240,43 @@ public class APJ
                     repeat -= delta;
                 }
 
-                final Match match;
-
-                // still some repeat ?
-                if (repeat > 0)
-                {
-                    // we raised ind ? --> limit start offset to (ind - 1)
+                if (repeat > 0) {
                     if ((off + repeat) >= ind)
                         repeat = (ind - off) - 1;
 
-                    // easy optimization
                     match = getMatch(data, off + repeat, ind + repeat);
-                    // adjust match length
                     match.incLength(repeat);
-                }
-                else
+                } else {
                     match = getMatch(data, off, ind);
-
-                // we use >= as we always prefer shorter offset
-                if (match.getSaved() >= saved)
-                {
-                    best = match;
-                    saved = match.getSaved();
                 }
             }
 
-            // next byte match
-            mInd++;
+            // ===== SCORE REAL BASEADO EM BITS =====
+            int newScore = (match.length << 3) - match.getCost();
+
+            // bônus reutilização offset
+            if (match.offset == lastOffset)
+                newScore += 2;
+
+            // penalização leve para matches muito curtos
+            if (match.length <= 2 && newScore <= 2)
+                newScore -= 1;
+
+            if ((best == null) ||
+                    (newScore > bestScore) ||
+                    (newScore == bestScore && match.length > best.length) ||
+                    (newScore == bestScore && match.length == best.length && match.offset < best.offset)) {
+                best = match;
+                bestScore = newScore;
+            }
+
+            mInd--;
         }
 
         return best;
     }
 
-    private static Match getMatch(byte[] data, int from, int ind)
-    {
+    private static Match getMatch(byte[] data, int from, int ind) {
         int refOffset;
         int curOffset;
         int len;
@@ -303,14 +285,18 @@ public class APJ
         refOffset = from;
         curOffset = ind;
         len = 0;
-        while ((curOffset < data.length) && (data[refOffset++] == data[curOffset++]))
+        final int max = data.length;
+
+        while (curOffset < max && data[refOffset] == data[curOffset]) {
+            refOffset++;
+            curOffset++;
             len++;
+        }
 
         return new Match(data, ind, ind - from, len);
     }
 
-    private static int getRepeat(byte[] data, int ind)
-    {
+    private static int getRepeat(byte[] data, int ind) {
         final byte value = data[ind];
 
         int off = ind + 1;
@@ -320,8 +306,7 @@ public class APJ
         return (off - ind) - 1;
     }
 
-    private static int getLengthDelta(int offset)
-    {
+    private static int getLengthDelta(int offset) {
         if ((offset < 0x80) || (offset >= 0x7D00))
             return 2;
         if (offset >= 0x500)
@@ -329,46 +314,14 @@ public class APJ
         return 0;
     }
 
-    static int getHighBitNum(int value)
-    {
-        int result = 0;
-        int v = value;
+    static int getHighBitNum(int value) {
+        if (value == 0)
+            return 0;
 
-        if (v >= 0x10000)
-        {
-            result += 16;
-            v >>= 16;
-        }
-        if (v >= 0x100)
-        {
-            result += 8;
-            v >>= 8;
-        }
-        if (v >= 0x10)
-        {
-            result += 4;
-            v >>= 4;
-        }
-        if (v >= 4)
-        {
-            result += 2;
-            v >>= 2;
-        }
-        if (v >= 2)
-            result++;
-
-        // // find highest bit
-        // while (v > 1)
-        // {
-        // v >>= 1;
-        // result++;
-        // }
-
-        return result;
+        return 31 - Integer.numberOfLeadingZeros(value);
     }
 
-    private static int readVariableNumber(BitReader stream)
-    {
+    private static int readVariableNumber(BitReader stream) {
         int result = 1;
 
         do
@@ -384,13 +337,11 @@ public class APJ
         return result;
     }
 
-    private static int readFixedNumber(BitReader stream, int nbit)
-    {
+    private static int readFixedNumber(BitReader stream, int nbit) {
         int result = 0;
         int i = nbit;
 
-        while (i-- > 0)
-        {
+        while (i-- > 0) {
             result <<= 1;
             result |= stream.readBit();
         }
@@ -398,10 +349,8 @@ public class APJ
         return result;
     }
 
-    private static void writeVariableNumber(BitWriter stream, int value)
-    {
-        if (value < 2)
-        {
+    private static void writeVariableNumber(BitWriter stream, int value) {
+        if (value < 2) {
             System.out.println("Encoding error - writeVariableNumber");
             return;
         }
@@ -413,33 +362,28 @@ public class APJ
 
         // then write remaining bit
         stream.writeBit((value >> nbit) & 1);
-        while (nbit-- > 0)
-        {
+        while (nbit-- > 0) {
             stream.writeBit(1);
             stream.writeBit((value >> nbit) & 1);
         }
         stream.writeBit(0);
     }
 
-    private static void writeFixedNumber(BitWriter stream, int value, int nbit)
-    {
+    private static void writeFixedNumber(BitWriter stream, int value, int nbit) {
         for (int i = nbit - 1; i >= 0; i--)
             stream.writeBit((value >> i) & 1);
     }
 
-    private static void writeLiteral(BitWriter stream, int data)
-    {
+    private static void writeLiteral(BitWriter stream, int data) {
         stream.writeBit(0);
         stream.writeUByte(data);
         wasMatch = false;
         statLiteral++;
     }
 
-    private static void writeTinyBlock(BitWriter stream, int offset)
-    {
+    private static void writeTinyBlock(BitWriter stream, int offset) {
         // should not be the case
-        if ((offset < 0) || (offset > 15))
-        {
+        if ((offset < 0) || (offset > 15)) {
             System.out.println("Offset encoding error - writeTinyBlock");
             return;
         }
@@ -460,17 +404,14 @@ public class APJ
             statRLE1++;
     }
 
-    private static void writeShortBlock(BitWriter stream, int offset, int length)
-    {
+    private static void writeShortBlock(BitWriter stream, int offset, int length) {
         // should not be the case
-        if ((offset < 1) || (offset > 127))
-        {
+        if ((offset < 1) || (offset > 127)) {
             System.out.println("Offset encoding error - writeShortBlock");
             return;
         }
         // should not be the case
-        if ((length < 2) || (length > 3))
-        {
+        if ((length < 2) || (length > 3)) {
             System.out.println("Length encoding error - writeShortBlock");
             return;
         }
@@ -490,8 +431,7 @@ public class APJ
             statRLEShort++;
     }
 
-    private static void writeBlock(BitWriter stream, int offset, int length)
-    {
+    private static void writeBlock(BitWriter stream, int offset, int length) {
         // block signature
         stream.writeBit(1);
         stream.writeBit(0);
@@ -499,17 +439,14 @@ public class APJ
         // if the last operations were literal or single byte
         // and the offset is unchanged since the last block copy
         // we can just store a 'null' offset and the length
-        if (!wasMatch && (lastOffset == offset))
-        {
+        if (!wasMatch && (lastOffset == offset)) {
             // minimal variable number (means 0)
             writeVariableNumber(stream, 2);
             writeVariableNumber(stream, length);
             statRepeatMatch++;
             if (offset == 1)
                 statRLELong++;
-        }
-        else
-        {
+        } else {
             int highOffset = (offset >> 8) + 2;
             int lowOffset = offset & 0xFF;
 
@@ -528,8 +465,7 @@ public class APJ
         wasMatch = true;
     }
 
-    private static void writeEndBlock(BitWriter stream)
-    {
+    private static void writeEndBlock(BitWriter stream) {
         // same as short block but with null offset
         stream.writeBit(1);
         stream.writeBit(1);
@@ -549,8 +485,8 @@ public class APJ
      * @throws IllegalArgumentException
      *         Cannot be packed using previous data block (try to pack without previous data block)
      */
-    public static byte[] pack(byte[] data, boolean ultra, boolean silent) throws IOException, IllegalArgumentException
-    {
+    public static byte[] pack(byte[] data, boolean ultra, boolean silent) throws IOException, IllegalArgumentException {
+
         // data length
         final int len = data.length;
         // not enough data to try compression..
@@ -562,81 +498,118 @@ public class APJ
         // PASS 1: build the byte matches table
         final ByteMatchList[] byteMatches = new ByteMatchList[0x100];
         for (int i = 0; i < byteMatches.length; i++)
-            byteMatches[i] = new ByteMatchList();
+            byteMatches[i] = new ByteMatchList(128);
 
         // current offset to start counting matches
         int mOffset = 0;
-        while (mOffset < data.length)
-        {
+        while (mOffset < data.length) {
             final int off = mOffset;
             final byte val = data[mOffset++];
 
             int repeat = 0;
-            while ((mOffset < data.length) && (data[mOffset] == val))
-            {
+            while ((mOffset < data.length) && (data[mOffset] == val)) {
                 repeat++;
                 mOffset++;
             }
 
             // need to unsign val / add new byte match
-            byteMatches[val & 0xFF].add(new ByteMatch(off, repeat));
+            byteMatches[val & 0xFF].add(off, repeat);
         }
 
         // sort all ByteMatch list
-        for (int i = 0; i < byteMatches.length; i++)
-            Collections.sort(byteMatches[i]);
+        //for (int i = 0; i < byteMatches.length; i++)
+        //Collections.sort(byteMatches[i]);
 
         // PASS 2: get best match for each source position using the matches table
         wasMatch = false;
         lastOffset = -1;
         final Match[] matches = new Match[data.length];
 
-        if (ultra)
-        {
+        if (ultra) {
             // ultra compression mode (very slow)
             for (int i = 1; i < matches.length; i++)
                 matches[i] = findBestMatch(byteMatches, data, i);
-        }
-        else
-        {
-            // fast compression mode
-            for (int i = 1; i < matches.length;)
-            {
-                final Match match = findBestMatch(byteMatches, data, i);
+        } else {
+            // fast compression mode with Lazy Matching + micro-heurística
+            for (int i = 1; i < matches.length;) {
+                Match bestNow = findBestMatch(byteMatches, data, i);
 
-                matches[i] = match;
+                int scoreNow = 0;
 
-                if (match != null)
-                {
-                    i += matches[i].length;
+                if (bestNow != null) {
+                    scoreNow = (bestNow.length << 3) - bestNow.getCost();
 
-                    if (match.isShortOrLong())
-                    {
-                        lastOffset = match.offset;
-                        wasMatch = true;
-                    }
+                    if (bestNow.offset == lastOffset)
+                        scoreNow += 2;
+
+                    if (bestNow.length <= 2 && scoreNow <= 2)
+                        scoreNow -= 1;
+
+                    // MICRO-HEURÍSTICA FAST
+                    // Se já economiza 3 bytes reais (~24 bits), aceita direto
+                    int threshold;
+
+                    if (bestNow.offset < 0x80)
+                        threshold = 16;
+                    else if (bestNow.offset < 0x500)
+                        threshold = 20;
                     else
-                        wasMatch = false;
+                        threshold = 24;
+
+                    if (scoreNow >= threshold) {
+                        matches[i] = bestNow;
+
+                        i += bestNow.length;
+
+                        if (bestNow.isShortOrLong()) {
+                            lastOffset = bestNow.offset;
+                            wasMatch = true;
+                        } else
+                            wasMatch = false;
+
+                        continue;
+                    }
                 }
-                else
-                {
+
+                Match bestNext = null;
+
+                if ((bestNow != null) && (i + 1 < matches.length))
+                    bestNext = findBestMatch(byteMatches, data, i + 1);
+
+                if ((bestNow != null) &&
+                        (bestNext != null) &&
+                        (bestNext.getSaved() > bestNow.getSaved())) {
+                    matches[i] = null;
                     i++;
                     wasMatch = false;
+                } else {
+                    matches[i] = bestNow;
+
+                    if (bestNow != null) {
+                        i += bestNow.length;
+
+                        if (bestNow.isShortOrLong()) {
+                            lastOffset = bestNow.offset;
+                            wasMatch = true;
+                        } else
+                            wasMatch = false;
+                    } else {
+                        i++;
+                        wasMatch = false;
+                    }
                 }
             }
         }
 
         // meaningful only in ultra mode
-        if (ultra)
-        {
+        if (ultra) {
             // PASS 3: walk backward in matches and find optimal match length
             final int costs[] = new int[matches.length + 1];
 
             // initialize ending cost
             costs[matches.length] = 0;
 
-            for (int i = matches.length - 1; i >= 0; i--)
-            {
+            for (int i = matches.length - 1; i >= 0; i--) {
                 // literal cost = next cost + 1
                 final int literalCost = costs[i + 1] + ((data[i] == 0) ? 7 : 9);
                 // default match cost
@@ -649,13 +622,11 @@ public class APJ
                     matchCost = match.getCost() + costs[i + match.length];
 
                 // literal cost is cheaper than match cost ?
-                if (literalCost < matchCost)
-                {
+                if (literalCost < matchCost) {
                     // change the match to a literal as it is more efficient
                     costs[i] = literalCost;
                     matches[i] = null;
-                }
-                else
+                } else
                     costs[i] = matchCost;
             }
         }
@@ -681,14 +652,12 @@ public class APJ
         statLiteral++;
 
         int ind = 1;
-        while (ind < matches.length)
-        {
+        while (ind < matches.length) {
             boolean done = false;
             final Match match = matches[ind];
 
             // match found ?
-            if (match != null)
-            {
+            if (match != null) {
                 final int off = match.offset;
                 final int l = match.length;
                 done = true;
@@ -703,8 +672,7 @@ public class APJ
                     writeBlock(result, off, l);
                 else if (l >= 4)
                     writeBlock(result, off, l);
-                else
-                {
+                else {
                     // long offset with very small match --> can't encode...
                     done = false;
 //                    System.out.println("Can't encode match: ind=" + ind + " - offset=" + off + " - len=" + l);
@@ -716,8 +684,7 @@ public class APJ
             }
 
             // no match found --> just add to literal buffer
-            if (!done)
-            {
+            if (!done) {
                 final byte v = data[ind++];
 
                 if (v == 0)
@@ -730,12 +697,11 @@ public class APJ
         // end mark
         writeEndBlock(result);
 
-        if (!silent)
-        {
+        if (!silent) {
             System.out.println("Stats:");
             System.out.println("Literal: " + statLiteral);
             System.out.println(
-                    "Tiny matches: " + statTinyMatch + " - short zero: " + statShortZero + " - RLE1: " + statRLE1);
+                "Tiny matches: " + statTinyMatch + " - short zero: " + statShortZero + " - RLE1: " + statRLE1);
             System.out.println("Short matches: " + statShortMatch + " - RLE short: " + statRLEShort);
             System.out.println("Long matches: " + statLongMatch + " - RLE long: " + statRLELong);
             System.out.println("Repeat matches: " + statRepeatMatch);
@@ -753,8 +719,7 @@ public class APJ
      * @return unpacked data
      * @throws IOException
      */
-    public static byte[] unpack(byte[] data, byte[] verif)
-    {
+    public static byte[] unpack(byte[] data, byte[] verif) {
         final BitReader source = new BitReader(data);
         final DynamicByteArray result = new DynamicByteArray();
         int offset, len;
@@ -767,19 +732,14 @@ public class APJ
         // first byte always unpacked
         result.write(source.readUByte());
 
-        try
-        {
-            while (!done)
-            {
+        try {
+            while (!done) {
                 // 1xx
-                if (source.readBit() == 1)
-                {
+                if (source.readBit() == 1) {
                     // 11x
-                    if (source.readBit() == 1)
-                    {
+                    if (source.readBit() == 1) {
                         // 111: 1 byte match with 4bit offset (0000 offset = 0 value)
-                        if (source.readBit() == 1)
-                        {
+                        if (source.readBit() == 1) {
                             // 111oooo : 4 bit for offset
                             offset = readFixedNumber(source, 4);
 
@@ -792,9 +752,8 @@ public class APJ
 
                             // not a short/long match
                             wasMatch = false;
-                        }
-                        else
-                        // 110: 2/3 bytes match with 7 bit offset (0000000 offset = end of stream)
+                        } else
+                            // 110: 2/3 bytes match with 7 bit offset (0000000 offset = end of stream)
                         {
                             // read 1 byte : oooooool
                             // offset = b7-b1 (7 bits)
@@ -805,8 +764,7 @@ public class APJ
                             offset >>= 1;
 
                             // offset != 0 ?
-                            if (offset != 0)
-                            {
+                            if (offset != 0) {
                                 // copy len byte from offset
                                 while (len-- > 0)
                                     result.writeCheck(result.readBackUByte(offset), verif);
@@ -820,17 +778,15 @@ public class APJ
                             // last was match
                             wasMatch = true;
                         }
-                    }
-                    else
-                    // 10x: variable encoded offset / length
+                    } else
+                        // 10x: variable encoded offset / length
                     {
                         // get variable encoded offset
                         offset = readVariableNumber(source);
 
                         // last was not a match and minimal variable offset ? --> use stored offset
-                        if (!wasMatch && (offset == 2))
-                        {
-                            // take saved offset
+                        if (!wasMatch && (offset == 2)) {
+                            // take bestScore offset
                             offset = lastOffset;
 
                             // take variable encoded len (2+x)
@@ -841,8 +797,7 @@ public class APJ
                                 result.writeCheck(result.readBackUByte(offset), verif);
                         }
                         // long offset and variable length
-                        else
-                        {
+                        else {
                             // last wasn't match ? offset -= 3 else offset -= 2
                             if (!wasMatch)
                                 offset -= 3;
@@ -875,9 +830,8 @@ public class APJ
                         // last was match
                         wasMatch = true;
                     }
-                }
-                else
-                // 0xx
+                } else
+                    // 0xx
                 {
                     // literal (single byte)
                     result.writeCheck(source.readUByte(), verif);
@@ -885,9 +839,7 @@ public class APJ
                     wasMatch = false;
                 }
             }
-        }
-        catch (Exception e)
-        {
+        } catch (Exception e) {
             System.out.println("Error at source[" + source.offset + "] / dest[" + result.size() + "]:");
             throw e;
         }

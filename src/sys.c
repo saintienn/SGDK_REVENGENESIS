@@ -16,11 +16,13 @@
 #include "bmp.h"
 #include "timer.h"
 #include "string.h"
-#include "sound.h"
-#include "xgm.h"
+#include "snd/sound.h"
+#include "snd/xgm.h"
 #include "dma.h"
 #include "sram.h"
 #include "sprite_eng.h"
+#include "sprite_eng_legacy.h"
+#include "task.h"
 
 #include "tools.h"
 #include "kdebug.h"
@@ -28,18 +30,14 @@
 #if (ENABLE_LOGO != 0)
 #define LOGO_SIZE                   64
 
-#include "libres.h"
+#include "res/libres.h"
 #endif
 
 
 #define IN_VINT                     1
-//#define IN_HINT                     2
-//#define IN_EXTINT                   4
 
 #define SHOW_FRAME_LOAD             (1 << 0)
-#define SHOW_FRAME_LOAD_MEAN        (2 << 0)
-
-#define VINT_ALLOWED_LINE_DELAY     4
+#define SHOW_FRAME_LOAD_MEAN        (1 << 1)
 
 #define LOAD_MEAN_FRAME_NUM         8
 
@@ -55,17 +53,14 @@ typedef union
 } InterruptCaller;
 
 
-// we don't want to share them
-extern u16 randbase;
-extern u16 currentDriver;
-// last V-Counter on VDP_waitVSync() / VDP_waitVInt() call
+// last V-Counter on VDP_waitVSync() / VDP_waitVInt() call (don't want to share it)
 extern u16 lastVCnt;
 
 // extern library callback function (we don't want to share them)
-extern void BMP_doVBlankProcess();
-extern void XGM_doVBlankProcess();
-extern bool MAP_doVBlankProcess();
-extern bool VDP_doVBlankScrollProcess();
+extern void BMP_doVBlankProcess(void);
+extern bool MAP_doVBlankProcess(void);
+extern bool VDP_doVBlankScrollProcess(void);
+
 
 // we don't want to share that method
 extern void MEM_init();
@@ -107,7 +102,7 @@ __attribute__((externally_visible)) u16 ext1State;
 __attribute__((externally_visible)) u16 ext2State;
 __attribute__((externally_visible)) u16 srState;
 
-__attribute__((externally_visible)) vu16 VBlankProcess;
+__attribute__((externally_visible)) u16 VBlankProcess;
 __attribute__((externally_visible)) vu16 intTrace;
 
 // need to be accessed from external
@@ -233,7 +228,7 @@ static u16 showValueU32U32U32(char *str1, u32 value1, char *str2, u32 value2, ch
 //    return pos + 1;
 //}
 
-static u16 showRegisterState(u16 pos)
+static NO_INLINE u16 showRegisterState(u16 pos)
 {
     u16 y = pos;
 
@@ -247,7 +242,7 @@ static u16 showRegisterState(u16 pos)
     return y;
 }
 
-static u16 showStackState(u16 pos)
+static NO_INLINE u16 showStackState(u16 pos)
 {
     char s[64];
     u16 y = pos;
@@ -266,7 +261,7 @@ static u16 showStackState(u16 pos)
     return y;
 }
 
-static u16 showExceptionDump(u16 pos)
+static NO_INLINE u16 showExceptionDump(u16 pos)
 {
     u16 y = pos;
 
@@ -277,7 +272,7 @@ static u16 showExceptionDump(u16 pos)
     return y;
 }
 
-static u16 showException4WDump(u16 pos)
+static NO_INLINE u16 showException4WDump(u16 pos)
 {
     u16 y = pos;
 
@@ -288,7 +283,7 @@ static u16 showException4WDump(u16 pos)
     return y;
 }
 
-static u16 showBusAddressErrorDump(u16 pos)
+static NO_INLINE u16 showBusAddressErrorDump(u16 pos)
 {
     u16 y = pos;
 
@@ -302,7 +297,7 @@ static u16 showBusAddressErrorDump(u16 pos)
 
 
 // bus error default callback
-void _buserror_callback()
+NO_INLINE void _buserror_callback()
 {
     SYS_setInterruptMaskLevel(7);
     VDP_init();
@@ -314,7 +309,7 @@ void _buserror_callback()
 }
 
 // address error default callback
-void _addresserror_callback()
+NO_INLINE void _addresserror_callback()
 {
     SYS_setInterruptMaskLevel(7);
     VDP_init();
@@ -326,7 +321,7 @@ void _addresserror_callback()
 }
 
 // illegal instruction exception default callback
-void _illegalinst_callback()
+NO_INLINE void _illegalinst_callback()
 {
     SYS_setInterruptMaskLevel(7);
     VDP_init();
@@ -338,7 +333,7 @@ void _illegalinst_callback()
 }
 
 // division by zero exception default callback
-void _zerodivide_callback()
+NO_INLINE void _zerodivide_callback()
 {
     SYS_setInterruptMaskLevel(7);
     VDP_init();
@@ -362,7 +357,7 @@ void _chkinst_callback()
 }
 
 // TRAPV instruction default callback
-void _trapvinst_callback()
+NO_INLINE void _trapvinst_callback()
 {
     SYS_setInterruptMaskLevel(7);
     VDP_init();
@@ -374,7 +369,7 @@ void _trapvinst_callback()
 }
 
 // privilege violation exception default callback
-void _privilegeviolation_callback()
+NO_INLINE void _privilegeviolation_callback()
 {
     SYS_setInterruptMaskLevel(7);
     VDP_init();
@@ -386,19 +381,19 @@ void _privilegeviolation_callback()
 }
 
 // trace default callback
-void _trace_callback()
+NO_INLINE void _trace_callback()
 {
 
 }
 
 // line 1x1x exception default callback
-void _line1x1x_callback()
+NO_INLINE void _line1x1x_callback()
 {
 
 }
 
 // error exception default callback
-void _errorexception_callback()
+NO_INLINE void _errorexception_callback()
 {
     SYS_setInterruptMaskLevel(7);
     VDP_init();
@@ -410,38 +405,25 @@ void _errorexception_callback()
 }
 
 // level interrupt default callback
-void _int_callback()
+static void _int_callback()
+{
+    //
+}
+
+// Empty Callback
+static void _empty_callback()
+{
+    //
+}
+
+// Empty h-int Callback
+static HINTERRUPT_CALLBACK _empty_hint_callback()
 {
     //
 }
 
 
-// Dummy V-Blank Callback
-void _vblank_dummy_callback()
-{
-    //
-}
-
-// Dummy V-Int Callback
-void _vint_dummy_callback()
-{
-    //
-}
-
-// Dummy H-Int Callback
-HINTERRUPT_CALLBACK _hint_dummy_callback()
-{
-    //
-}
-
-// Dummy Ext-Int Callback
-void _extint_dummy_callback()
-{
-    //
-}
-
-
-void _start_entry()
+NO_INLINE void _start_entry()
 {
     u32 banklimit;
     u16* src;
@@ -470,15 +452,14 @@ void _start_entry()
     if (len > banklimit)
     {
         // we first do the second bank part
-        memcpyU16(dst + banklimit, FAR(src + banklimit), len - banklimit);
+        memcpy(dst + banklimit, FAR(src + banklimit), (len - banklimit) * 2);
         // adjust len
         len = banklimit;
     }
     // initialize "initialized variables"
-    memcpyU16(dst, FAR(src), len);
+    memcpy(dst, FAR(src), len * 2);
 
-    // initialize random number generator
-    setRandomSeed(0xC427);
+    // reset vtimer
     vtimer = 0;
 
     // default interrupt callback
@@ -510,7 +491,7 @@ void _start_entry()
 
     #if (ZOOMING_LOGO != 0)
             // init fade in to 30 step
-            if (PAL_initFading(0, logo_pal->length - 1, palette_black, logo_pal->data, 30))
+            if (PAL_initFade(0, logo_pal->length - 1, palette_black, logo_pal->data, 30))
             {
                 // prepare zoom
                 u16 size = LOGO_SIZE;
@@ -527,16 +508,18 @@ void _start_entry()
                     const u32 w = LOGO_SIZE - size;
 
                     // adjust palette for fade
-                    PAL_doFadingStep();
+                    PAL_doFadeStep();
 
                     // zoom logo
-                    BMP_loadAndScaleBitmap(logo, 128 - (w >> 1), 80 - (w >> 1), w, w, FALSE);
+                    BMP_drawBitmapScaled(logo, 128 - (w >> 1), 80 - (w >> 1), w, w, FALSE);
                     // flip to screen
                     BMP_flip(FALSE);
+                    // so palette fade is done
+                    DMA_flushQueue();
                 }
 
                 // while fade not completed
-                while(PAL_doFadingStep());
+                PAL_waitFadeCompletion();
             }
 
             // wait 1 second
@@ -546,7 +529,7 @@ void _start_entry()
             PAL_setPalette(PAL0, palette_black, CPU);
 
             // don't load the palette immediatly
-            BMP_loadBitmap(logo, 128 - (LOGO_SIZE / 2), 80 - (LOGO_SIZE / 2), FALSE);
+            BMP_drawBitmap(logo, 128 - (LOGO_SIZE / 2), 80 - (LOGO_SIZE / 2), FALSE);
             // flip
             BMP_flip(0);
 
@@ -579,7 +562,7 @@ void _start_entry()
     while(TRUE) SYS_doVBlankProcess();
 }
 
-void _reset_entry()
+NO_INLINE void _reset_entry()
 {
     internal_reset();
 
@@ -589,23 +572,22 @@ void _reset_entry()
     while(TRUE) SYS_doVBlankProcess();
 }
 
-static void internal_reset()
+static NO_INLINE void internal_reset()
 {
     // disable SRAM just in case (if it was enabled on reset)
     SRAM_disable();
 
 #if (ENABLE_BANK_SWITCH != 0)
     // reset banks
-    u16 len = 8;
-    while(--len) SYS_setBank(len, len);
+    SYS_resetBanks();
 #endif
 
-    vblankCB = _vblank_dummy_callback;
-    vintCB = _vint_dummy_callback;
+    vblankCB = _empty_callback;
+    vintCB = _empty_callback;
     // fast hint call (auto modified JMP instruction)
     hintCaller.jmpInst = 0x4EF9;                // JMP (xxx).L
-    hintCaller.addr = _hint_dummy_callback;
-    eintCB = _extint_dummy_callback;
+    hintCaller.addr = _empty_hint_callback;
+    eintCB = _empty_callback;
     VBlankProcess = 0;
     intTrace = 0;
     intLevelSave = 0;
@@ -625,6 +607,11 @@ static void internal_reset()
     // WARNING: it's important to not access the VDP too soon or you can lock the system (it's why we do it just here) !
     while(GET_VDP_STATUS(VDP_DMABUSY_FLAG));
 
+    // sprite engine variables reset (we use it to know if sprite engine is initialized)
+    // important to do it *before* VDP_init
+    spritesPool = NULL;
+    spriteVramSize = 0;
+
     // init part (always do MEM_init() first)
     MEM_init();
     // need to be reseted before first DMA_init()
@@ -632,15 +619,12 @@ static void internal_reset()
     dmaDataBuffer = NULL;
     DMA_init();
     DMA_setMaxTransferSizeToDefault();
+    TSK_init();
     VDP_init();
-    PSG_init();
+    PSG_reset();
     JOY_init();
     // reseting z80 also reset the ym2612
     Z80_init();
-
-    // Sprite engine variables reset (we use to know if sprite engine is initialized)
-    spritesPool = NULL;
-    spriteVramSize = 0;
 
     // enable interrupts
     SYS_setInterruptMaskLevel(3);
@@ -651,7 +635,7 @@ bool SYS_doVBlankProcess()
     return SYS_doVBlankProcessEx(ON_VBLANK_START);
 }
 
-bool SYS_doVBlankProcessEx(VBlankProcessTime processTime)
+NO_INLINE bool SYS_doVBlankProcessEx(VBlankProcessTime processTime)
 {
     if (processTime != IMMEDIATELY)
     {
@@ -682,24 +666,20 @@ bool SYS_doVBlankProcessEx(VBlankProcessTime processTime)
         u16 dmaSize = DMA_getQueueTransferSize();
 #endif
 
-        // DMA protection for XGM driver
-        if (currentDriver == Z80_DRIVER_XGM)
-        {
-            XGM_set68KBUSProtection(TRUE);
+        // enable bus protection for Z80 before flushing DMA
+        Z80_enableBusProtection();
 
-            // delay enabled ? --> wait a bit to improve PCM playback (test on SOR2)
-            if (XGM_getForceDelayDMA()) waitSubTick(10);
-            DMA_flushQueue();
+        // delay enabled ? --> wait a bit to improve PCM playback (test on SOR2)
+        if (Z80_getForceDelayDMA()) waitSubTick(10);
+        DMA_flushQueue();
 
-            XGM_set68KBUSProtection(FALSE);
-        }
-        else
-            DMA_flushQueue();
+        // can disable bus protection
+        Z80_disableBusProtection();
 
 #if (LIB_LOG_LEVEL >= LOG_LEVEL_WARNING)
         vcnt = GET_VCOUNTER;
 
-        // above scanline 2 ? better to warn about DMA overrun..
+        // above scanline 2 ? better to warn about DMA overrun
         if ((vcnt < 224) && (vcnt > 2))
             KLog_U3("Warning: DMA task (", dmaSize, " bytes) completed outside VBlank area. Scanline after completion = ", vcnt, " on frame #", vtimer);
 #endif
@@ -772,10 +752,10 @@ bool SYS_doVBlankProcessEx(VBlankProcessTime processTime)
         }
 
         // write immediately in VRAM the sprite position change
-        vu16* pw = (u16 *) GFX_DATA_PORT;
-        vu32* pl = (u32 *) GFX_CTRL_PORT;
+        vu16* pw = (u16 *) VDP_DATA_PORT;
+        vu32* pl = (u32 *) VDP_CTRL_PORT;
 
-        *pl = GFX_WRITE_VRAM_ADDR(VDP_SPRITE_TABLE);
+        *pl = VDP_WRITE_VRAM_ADDR(VDP_SPRITE_TABLE);
         *pw = vdpSprite->y;
     }
 
@@ -783,6 +763,11 @@ bool SYS_doVBlankProcessEx(VBlankProcessTime processTime)
     JOY_update();
 
     return TRUE;
+}
+
+bool SYS_nextFrame(void)
+{
+    return SYS_doVBlankProcess();
 }
 
 void SYS_disableInts()
@@ -844,27 +829,32 @@ void SYS_enableInts()
 void SYS_setVBlankCallback(VoidCallback *CB)
 {
     if (CB) vblankCB = CB;
-    else vblankCB = _vblank_dummy_callback;
+    else vblankCB = _empty_callback;
 }
 
 void SYS_setVIntCallback(VoidCallback *CB)
 {
     if (CB) vintCB = CB;
-    else vintCB = _vint_dummy_callback;
+    else vintCB = _empty_callback;
 }
 
 void SYS_setHIntCallback(VoidCallback *CB)
 {
     if (CB) hintCaller.addr = CB;
-    else hintCaller.addr = _hint_dummy_callback;
+    else hintCaller.addr = _empty_hint_callback;
 }
 
 void SYS_setExtIntCallback(VoidCallback *CB)
 {
     if (CB) eintCB = CB;
-    else eintCB = _extint_dummy_callback;
+    else eintCB = _empty_callback;
 }
 
+
+bool SYS_getShowFrameLoad()
+{
+    return (flags & SHOW_FRAME_LOAD)?TRUE:FALSE;
+}
 
 void SYS_showFrameLoad(bool mean)
 {
@@ -879,18 +869,8 @@ void SYS_showFrameLoad(bool mean)
     vdpSprite->attribut = TILE_ATTR_FULL(PAL0, TRUE, FALSE, FALSE, TILE_FONT_INDEX + 94);
     vdpSprite->x = 0x80;
 
-    // apply changes immediately in VRAM
-    vu16* pw = (u16 *) GFX_DATA_PORT;
-    vu32* pl = (u32 *) GFX_CTRL_PORT;
-
-    // prepare write to sprite #0
-    *pl = GFX_WRITE_VRAM_ADDR(VDP_SPRITE_TABLE);
-
-    // write fields in correct order
-    *pw = vdpSprite->y;
-    *pw = vdpSprite->size_link;
-    *pw = vdpSprite->attribut;
-    *pw = vdpSprite->x;
+    // update this single sprite entry
+    VDP_updateSprites(1, DMA_QUEUE);
 }
 
 void SYS_hideFrameLoad()
@@ -902,14 +882,8 @@ void SYS_hideFrameLoad()
     // hide it
     vdpSprite->y = 0;
 
-    // apply changes immediately in VRAM
-    vu16* pw = (u16 *) GFX_DATA_PORT;
-    vu32* pl = (u32 *) GFX_CTRL_PORT;
-
-    // prepare write to sprite #0
-    *pl = GFX_WRITE_VRAM_ADDR(VDP_SPRITE_TABLE);
-    // no need to write more
-    *pw = vdpSprite->y;
+    // update this single sprite entry
+    VDP_updateSprites(1, DMA_QUEUE);
 }
 
 bool SYS_isInVInt()
@@ -1007,7 +981,7 @@ u16 SYS_getCPULoad()
 }
 
 
-u16 SYS_computeChecksum()
+NO_INLINE u16 SYS_computeChecksum()
 {
     u32 adr;
     u32 chk;
@@ -1046,13 +1020,27 @@ bool SYS_isChecksumOk()
 }
 
 
-void SYS_die(char *err)
+void SYS_die(char *err, ...)
 {
     SYS_setInterruptMaskLevel(7);
     VDP_init();
-    VDP_drawText("A fatal error occured !", 2, 2);
-    VDP_drawText("cannot continue...", 4, 3);
-    if (err) VDP_drawText(err, 0, 5);
+    VDP_setBackgroundColor(63);
+    VDP_drawText("A fatal error occured!", 9, 2);
+    VDP_drawText("cannot continue...", 11, 3);
+
+    u8 y = 5;
+
+    va_list argptr;
+    va_start(argptr, err);
+
+    const char* str = err;
+    while (str != NULL)
+    {
+        VDP_drawText(str, 1, y);
+        str = va_arg(argptr, const char*);
+        y++;
+    }
+    va_end(argptr);
 
     while(1);
 }

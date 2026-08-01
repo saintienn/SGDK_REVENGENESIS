@@ -19,12 +19,11 @@ import sgdk.rescomp.type.SpriteCell.OptimizationType;
 import sgdk.tool.ImageUtil;
 import sgdk.tool.Random;
 import sgdk.tool.SystemUtil;
-import sgdk.tool.ThreadUtil;
 
 public class SpriteCutter
 {
-    private static List<Solution> getFastOptimizedSolutions(byte[] image8bpp, Dimension imageDim, Rectangle frameBounds,
-            OptimizationType optimizationType)
+    private static List<Solution> getFastOptimizedSolutions(byte[] image8bpp, Dimension imageDim, Rectangle frameBounds, OptimizationType optimizationType,
+            boolean betterOpt)
     {
         final List<Solution> result = new ArrayList<>();
         final SpriteCutter spriteCutter = new SpriteCutter(image8bpp, imageDim, frameBounds);
@@ -39,20 +38,39 @@ public class SpriteCutter
             for (int gridSize = 8; gridSize <= 32; gridSize += 24)
             {
                 // get best grid (minimum number of tile for region image covering)
-                final CellGrid grid = spriteCutter.getBestGrid(gridSize, optimizationType);
-                // quick tiles merging where possible
-                if (gridSize == 8)
-                    grid.mergeCells(optimizationType);
-                // build the solution from the grid
-                final Solution solution = spriteCutter.getSolution(grid, optimizationType);
-                // fast optimization
-                solution.fastOptimize();
-                // fix positions
-                solution.fixPos();
+                final List<CellGrid> grids;
 
-                // add the solution
-                if (!solution.cells.isEmpty())
-                    result.add(solution);
+                // take all grids
+                if (betterOpt)
+                    grids = spriteCutter.getBestGrids(gridSize, optimizationType);
+                else
+                {
+                    // only take the best guessed grid
+                    grids = new ArrayList<>();
+                    grids.add(spriteCutter.getBestGrid(gridSize, optimizationType));
+                }
+
+                for (CellGrid grid : grids)
+                {
+                    try
+                    {
+                        // quick tiles merging where possible
+                        if (gridSize == 8)
+                            grid.mergeCells(optimizationType);
+                        // build the solution from the grid
+                        final Solution solution = spriteCutter.getSolution(grid, optimizationType);
+                        // fast optimization
+                        solution.fastOptimize();
+
+                        // add the solution
+                        if (!solution.cells.isEmpty())
+                            result.add(solution);
+                    }
+                    catch (Exception e)
+                    {
+                        // ignore solution when error occur (rare but can happen in some specific case)
+                    }
+                }
             }
         }
 
@@ -67,10 +85,9 @@ public class SpriteCutter
      * @see #startOptimization(Solution, int)
      * @see #getOptimizedSolution()
      */
-    public static List<SpriteCell> getFastOptimizedSpriteList(byte[] image8bpp, Dimension imageDim,
-            OptimizationType optimizationType)
+    public static List<SpriteCell> getFastOptimizedSpriteList(byte[] image8bpp, Dimension imageDim, OptimizationType optimizationType, boolean betterOpt)
     {
-        return getFastOptimizedSpriteList(image8bpp, imageDim, new Rectangle(imageDim), optimizationType);
+        return getFastOptimizedSpriteList(image8bpp, imageDim, new Rectangle(imageDim), optimizationType, betterOpt);
     }
 
     /**
@@ -81,10 +98,10 @@ public class SpriteCutter
      * @see #startOptimization(Solution, int)
      * @see #getOptimizedSolution()
      */
-    public static List<SpriteCell> getFastOptimizedSpriteList(byte[] image8bpp, Dimension imageDim,
-            Rectangle frameBounds, OptimizationType optimizationType)
+    public static List<SpriteCell> getFastOptimizedSpriteList(byte[] image8bpp, Dimension imageDim, Rectangle frameBounds, OptimizationType optimizationType,
+            boolean betterOpt)
     {
-        final List<Solution> solutions = getFastOptimizedSolutions(image8bpp, imageDim, frameBounds, optimizationType);
+        final List<Solution> solutions = getFastOptimizedSolutions(image8bpp, imageDim, frameBounds, optimizationType, betterOpt);
 
         if (solutions.isEmpty())
             return new ArrayList<>();
@@ -124,8 +141,7 @@ public class SpriteCutter
      * @see SpriteCutter#startOptimization(Solution, int)
      * @see SpriteCutter#getOptimizedSolution()
      */
-    public static List<SpriteCell> getSlowOptimizedSpriteList(byte[] image8bpp, Dimension imageDim, long optIteration,
-            OptimizationType optimizationType)
+    public static List<SpriteCell> getSlowOptimizedSpriteList(byte[] image8bpp, Dimension imageDim, long optIteration, OptimizationType optimizationType)
     {
         return getSlowOptimizedSpriteList(image8bpp, imageDim, new Rectangle(imageDim), optIteration, optimizationType);
     }
@@ -143,8 +159,8 @@ public class SpriteCutter
      * @see SpriteCutter#startOptimization(Solution, int)
      * @see SpriteCutter#getOptimizedSolution()
      */
-    public static List<SpriteCell> getSlowOptimizedSpriteList(byte[] image8bpp, Dimension imageDim,
-            Rectangle frameBounds, long optIteration, OptimizationType optimizationType)
+    public static List<SpriteCell> getSlowOptimizedSpriteList(byte[] image8bpp, Dimension imageDim, Rectangle frameBounds, long optIteration,
+            OptimizationType optimizationType)
     {
         // get fast solution
         final List<Solution> baseSolutions = new ArrayList<>();
@@ -155,37 +171,50 @@ public class SpriteCutter
 
         for (int opt = 0; opt < 2; opt++)
         {
-            for (int gridSize = 8; gridSize <= 32; gridSize += 8)
+            // only need to use grid size of 8 or 32, intermediate doesn't not produce better result
+            // as we fuse adjacent cells when grid size = 8
+            for (int gridSize = 8; gridSize <= 32; gridSize += 24)
             {
-                // get best grid (minimum number of tile for region image covering)
-                final CellGrid grid = spriteCutter.getBestGrid(gridSize, optimizationType);
-                // quick tiles merging where possible
-                if (gridSize == 8)
-                    grid.mergeCells(optimizationType);
-                // build the solution from the grid
-                final Solution solution = spriteCutter.getSolution(grid, optimizationType);
+                // get best grids
+                final List<CellGrid> grids = spriteCutter.getBestGrids(gridSize, optimizationType);
 
-                // do fast optimization ?
-                if (opt == 1)
-                    solution.fastOptimize();
+                for (CellGrid grid : grids)
+                {
+                    try
+                    {
+                        // quick tiles merging where possible
+                        if (gridSize == 8)
+                            grid.mergeCells(optimizationType);
+                        // build the solution from the grid
+                        final Solution solution = spriteCutter.getSolution(grid, optimizationType);
 
-                // fix positions
-                solution.fixPos();
+                        // do fast optimization ?
+                        if (opt == 1)
+                            solution.fastOptimize();
 
-                // add to base solutions
-                if (!solution.cells.isEmpty())
-                    baseSolutions.add(solution);
+                        // fix positions
+                        solution.fixPos();
+
+                        // add to base solutions
+                        if (!solution.cells.isEmpty())
+                            baseSolutions.add(solution);
+                    }
+                    catch (Exception e)
+                    {
+                        // ignore solution when error occur (rare but can happen in some specific case)
+                    }
+                }
             }
         }
 
-        // start optimization with a base of solution (less or more optimized)
+        // start optimization with a set of base solution (less or more optimized)
         spriteCutter.startOptimization(baseSolutions, optIteration);
 
         try
         {
             do
             {
-                Thread.sleep(100);
+                Thread.sleep(10);
             }
             while (!spriteCutter.isOptimizationDone());
         }
@@ -219,6 +248,14 @@ public class SpriteCutter
         public Solution()
         {
             this(new byte[image.length]);
+        }
+
+        public Solution(Solution solution)
+        {
+            this();
+
+            for (SpriteCell cell : solution.cells)
+                addCell(new SpriteCell(cell, cell.opt));
         }
 
         public Solution(CellGrid grid, OptimizationType opt)
@@ -280,7 +317,7 @@ public class SpriteCutter
             }
 
             // always add when optimization is NONE
-            if ((numCoveredPixel > 0) || (cell.opt == OptimizationType.NONE)) 
+            if ((numCoveredPixel > 0) || (cell.opt == OptimizationType.NONE))
             {
                 remainingPixToCover -= numCoveredPixel;
                 // num covered pixel by this sprite cell
@@ -298,6 +335,24 @@ public class SpriteCutter
             return remainingPixToCover <= 0;
         }
 
+        public int getSpriteOverdraw()
+        {
+            int result = 0;
+
+            for (SpriteCell curCell : cells)
+            {
+                for (SpriteCell otherCell : cells)
+                {
+                    if (curCell != otherCell)
+                    {
+                        result += curCell.getOverdraw(otherCell);
+                    }
+                }
+            }
+
+            return result;
+        }
+
         public double getScore()
         {
             // not yet complete
@@ -310,6 +365,8 @@ public class SpriteCutter
 
                 for (SpriteCell cell : cells)
                     result += cell.getScore();
+
+                result += getSpriteOverdraw() / 3000d;
 
                 // if more than 16 sprites (not allowed) we set a penalty
                 if (cells.size() > 16)
@@ -331,20 +388,20 @@ public class SpriteCutter
             return isComplete();
         }
 
-        private boolean rebuildCoverage(List<SpriteCell> sprcells)
-        {
-            // rebuild solution and coverage
-            reset();
-            for (SpriteCell sc : sprcells)
-                addCell(sc);
+        // private boolean rebuildCoverage(List<SpriteCell> sprcells)
+        // {
+        // // rebuild solution and coverage
+        // reset();
+        // for (SpriteCell sc : sprcells)
+        // addCell(sc);
+        //
+        // return isComplete();
+        // }
 
-            return isComplete();
-        }
-
-        private boolean rebuildCoverage()
-        {
-            return rebuildCoverage(new ArrayList<>(cells));
-        }
+        // private boolean rebuildCoverage()
+        // {
+        // return rebuildCoverage(new ArrayList<>(cells));
+        // }
 
         private void rebuildWithout(SpriteCell cell)
         {
@@ -458,7 +515,7 @@ public class SpriteCutter
         public void optimizeMerge()
         {
             // sort cells on their size and coverage
-            Collections.sort(cells, SpriteCell.sizeAndCoverageComparator);
+            Collections.sort(cells, SpriteCell.sizeComparator);
 
             final List<SpriteCell> cellsCopy = new ArrayList<>(cells);
 
@@ -470,7 +527,7 @@ public class SpriteCutter
         private void optimizePos()
         {
             // sort cells on their size and coverage
-            Collections.sort(cells, SpriteCell.sizeAndCoverageComparator);
+            Collections.sort(cells, SpriteCell.sizeComparator);
 
             final List<SpriteCell> cellsCopy = new ArrayList<>(cells);
 
@@ -484,20 +541,17 @@ public class SpriteCutter
         private void optimizeOverdraw()
         {
             // sort cells on their size and coverage
-            Collections.sort(cells, SpriteCell.sizeAndCoverageComparator);
-            
+            Collections.sort(cells, SpriteCell.sizeComparator);
+
             final List<SpriteCell> cellsCopy = new ArrayList<>(cells);
 
-            for(int i = 0; i < 2; i++)
+            // rebuild solution while optimize cell position to avoid as much sprite overdraw as possible
+            reset();
+            // start from largest cell
+            for (SpriteCell cell : cellsCopy)
             {
-                // rebuild solution while optimize cell position to avoid as much sprite overdraw as possible
-                reset();
-                // start from largest cell
-                for (SpriteCell cell : cellsCopy)
-                {
-                    cell.optimizeOverdraw(dim, cellsCopy);
-                    addCell(cell);
-                }
+                cell.optimizeOverdraw(image, dim, cellsCopy);
+                addCell(cell);
             }
         }
 
@@ -523,7 +577,7 @@ public class SpriteCutter
                 score = newScore;
 
                 // sort cells on their size and coverage
-                Collections.sort(cells, SpriteCell.sizeAndCoverageComparator);
+                Collections.sort(cells, SpriteCell.sizeComparator);
 
                 // optimize each cell independently (starting from smallest cell)
                 for (int i = cells.size() - 1; i >= 0; i--)
@@ -550,14 +604,56 @@ public class SpriteCutter
 
         public void fastOptimize()
         {
-            for (int i = 0; i < 2; i++)
+            // keep sprites inside frame box 
+            fixPos();
+
+            double score;
+            double minScore = getScore();
+            Solution bestSolution = new Solution(this);
+            int conv = 0;
+
+            while (true)
             {
+                // first iteration from coverage image
                 optimizeMerge();
                 optimizePos();
-                optimizeSize((i & 1) == 0);
-                fixPos();
+                optimizeSize(false);
                 optimizeOverdraw();
+                fixPos();
+
+                score = getScore();
+                if (score < minScore)
+                {
+                    minScore = score;
+                    bestSolution.rebuildFrom(cells);
+                    conv = 0;
+                }
+
+                // stop if we reached a minimum
+                if (conv++ >= 3)
+                    break;
+
+                // second iteration from origin image
+                optimizeMerge();
+                optimizePos();
+                optimizeSize(true);
+                optimizeOverdraw();
+                fixPos();
+
+                score = getScore();
+                if (score < minScore)
+                {
+                    minScore = score;
+                    bestSolution.rebuildFrom(cells);
+                    conv = 0;
+                }
+
+                // stop if we reached a minimum
+                if (conv++ >= 3)
+                    break;
             }
+
+            rebuildFrom(bestSolution.cells);
         }
 
         public void showInfo()
@@ -598,6 +694,14 @@ public class SpriteCutter
                 gen = 0;
 
                 addSolution(base);
+            }
+
+            public Solution getRandomGoodSolution()
+            {
+                synchronized (solutions)
+                {
+                    return solutions.get(Random.nextInt(Math.min(solutions.size(), 10)));
+                }
             }
 
             public Solution getRandomSolution()
@@ -810,16 +914,14 @@ public class SpriteCutter
             this.maxIteration = numIteration;
 
             globalBestScore = Double.MAX_VALUE;
-            numWorker = SystemUtil.getNumberOfCPUs();
-            executor = new ThreadPoolExecutor(numWorker, numWorker * 2, 5L, TimeUnit.SECONDS,
-                    new LinkedBlockingQueue<Runnable>());
+            numWorker = SystemUtil.getNumberOfCPUs() * 2;
+            executor = new ThreadPoolExecutor(numWorker, numWorker * 4, 5L, TimeUnit.SECONDS, new LinkedBlockingQueue<Runnable>());
             workImagePool = new Stack<>();
             branches = new ArrayList<>();
             branchMap = new HashMap<>();
 
-            // build the work image pool (should never need more than numWorker * 2 but just for
-            // safety)
-            for (int i = 0; i < numWorker * 4; i++)
+            // build the work image pool (should never need more than numWorker * 2 but just for safety)
+            for (int i = 0; i < numWorker * 8; i++)
                 workImagePool.push(new byte[image.length]);
 
             curBranchTask = 0;
@@ -886,8 +988,6 @@ public class SpriteCutter
                     else
                         break;
                 }
-
-                ThreadUtil.sleep(0);
             }
 
             executor.shutdown();
@@ -919,10 +1019,10 @@ public class SpriteCutter
                     // add to list and to map
                     branches.add(result);
                     branchMap.put(id, result);
-
-                    curBranchId++;
                 }
             }
+
+            curBranchId++;
 
             return result;
         }
@@ -943,7 +1043,8 @@ public class SpriteCutter
             }
         }
 
-        void addSolution(Integer branchId, Solution solution)
+        // important to synchronize it
+        synchronized void addSolution(Integer branchId, Solution solution)
         {
             // add only complete solution
             if (solution.isComplete())
@@ -961,44 +1062,54 @@ public class SpriteCutter
         private void addNewTask()
         {
             final Runnable task;
-            final int size = branches.size();
 
-            // branch mutation
-            if ((Random.nextInt() & 0x1F) != 0)
+            synchronized (branches)
             {
-                final SolutionBranch branch;
-                final Solution solution;
+                final int size = branches.size();
 
-                synchronized (branches)
+                // branch mutation
+                if ((Random.nextInt() & 0xF) != 0)
                 {
+                    final SolutionBranch branch;
+                    final Solution solution;
+
                     branch = branches.get(curBranchTask);
                     solution = branch.getRandomSolution();
+
+                    // cell mutation
+                    task = new SolutionPartMutationBuilder(branch.id, solution, (Random.nextInt() & 3) + 1);
+                    // so we process each branch
+                    curBranchTask = (curBranchTask + 1) % size;
                 }
-
-                // cell mutation
-                task = new SolutionPartMutationBuilder(branch.id, solution, (Random.nextInt() & 3) + 1);
-                // so we process each branch
-                curBranchTask = (curBranchTask + 1) % size;
-            }
-            // new branch
-            else
-            {
-                final SolutionBranch branch1;
-                final SolutionBranch branch2;
-                final Solution solution1;
-                final Solution solution2;
-
-                synchronized (branches)
+                // new branch
+                else
                 {
-                    branch1 = branches.get(Random.nextInt(size));
-                    branch2 = branches.get(Random.nextInt(size));
-                    solution1 = branch1.getRandomSolution();
-                    solution2 = branch2.getRandomSolution();
-                }
+                    final SolutionBranch branch1;
+                    final SolutionBranch branch2;
+                    final Solution solution1;
+                    final Solution solution2;
 
-                // mix mutation
-                task = new SolutionMixMutationBuilder(Integer.valueOf(curBranchId), solution1, solution2);
-                curBranchId++;
+                    // mix with best solutions
+                    if (Random.nextBoolean())
+                    {
+                        branch1 = branches.get(Random.nextInt(Math.min(size, 50)));
+                        branch2 = branches.get(Random.nextInt(Math.min(size, 50)));
+                        solution1 = branch1.getRandomGoodSolution();
+                        solution2 = branch2.getRandomGoodSolution();
+                    }
+                    else
+                    // pure random mix
+                    {
+                        branch1 = branches.get(Random.nextInt(size));
+                        branch2 = branches.get(Random.nextInt(size));
+                        solution1 = branch1.getRandomSolution();
+                        solution2 = branch2.getRandomSolution();
+                    }
+
+                    // mix mutation
+                    task = new SolutionMixMutationBuilder(Integer.valueOf(curBranchId), solution1, solution2);
+                    curBranchId++;
+                }
             }
 
             executor.execute(task);
@@ -1054,8 +1165,7 @@ public class SpriteCutter
         {
             for (int yc = 0; yc < numCellH; yc++)
             {
-                sprites.add(new Rectangle(xc * 32, yc * 32, (xc == (numCellW - 1)) ? lastCellW * 8 : 32,
-                        (yc == (numCellH - 1)) ? lastCellH * 8 : 32));
+                sprites.add(new Rectangle(xc * 32, yc * 32, (xc == (numCellW - 1)) ? lastCellW * 8 : 32, (yc == (numCellH - 1)) ? lastCellH * 8 : 32));
             }
         }
 
@@ -1073,8 +1183,7 @@ public class SpriteCutter
         {
             for (int offY = -cellMask; offY <= 0; offY++)
             {
-                final CellGrid grid = new CellGrid(offX, offY, (dim.width + (cellSize * 2)) / cellSize,
-                        (dim.height + (cellSize * 2)) / cellSize);
+                final CellGrid grid = new CellGrid(offX, offY, (dim.width + (cellSize * 2)) / cellSize, (dim.height + (cellSize * 2)) / cellSize);
 
                 for (int x = offX, xc = 0; x < (dim.width + cellSize); x += cellSize, xc++)
                 {
@@ -1098,6 +1207,43 @@ public class SpriteCutter
         }
 
         return bestGrid;
+    }
+
+    public List<CellGrid> getBestGrids(int cellSize, OptimizationType opt)
+    {
+        final Rectangle imageBounds = new Rectangle(dim);
+        int bestScore = Integer.MAX_VALUE;
+        final int cellMask = cellSize - 1;
+        final List<CellGrid> result = new ArrayList<>();
+
+        for (int offX = -cellMask; offX <= 0; offX++)
+        {
+            for (int offY = -cellMask; offY <= 0; offY++)
+            {
+                final CellGrid grid = new CellGrid(offX, offY, (dim.width + (cellSize * 2)) / cellSize, (dim.height + (cellSize * 2)) / cellSize);
+
+                for (int x = offX, xc = 0; x < (dim.width + cellSize); x += cellSize, xc++)
+                {
+                    for (int y = offY, yc = 0; y < (dim.height + cellSize); y += cellSize, yc++)
+                    {
+                        final SpriteCell tileRect = new SpriteCell(x, y, cellSize, cellSize, opt);
+
+                        if (!ImageUtil.isTransparent(image, dim, tileRect.intersection(imageBounds)))
+                            grid.set(xc, yc, tileRect);
+                    }
+                }
+
+                final int usedCells = grid.getUsedCells(false);
+                // we keep better score ?
+                if (usedCells <= (bestScore * 1.2))
+                {
+                    bestScore = usedCells;
+                    result.add(grid);
+                }
+            }
+        }
+
+        return result;
     }
 
     public Solution getSolution(CellGrid grid, OptimizationType opt)

@@ -12,9 +12,11 @@ import java.util.Set;
 
 import sgdk.rescomp.Compiler;
 import sgdk.rescomp.Resource;
+import sgdk.rescomp.resource.Bin;
 import sgdk.rescomp.tool.Util;
 import sgdk.rescomp.type.Basics.CollisionType;
 import sgdk.rescomp.type.Basics.Compression;
+import sgdk.rescomp.type.SpriteCell.OptimizationLevel;
 import sgdk.rescomp.type.SpriteCell.OptimizationType;
 import sgdk.tool.ImageUtil;
 
@@ -35,9 +37,10 @@ public class SpriteAnimation extends Resource
      *        width of frame in tile
      * @param hf
      *        height of frame in tile
+     * @param showCuttingResult
      */
-    public SpriteAnimation(String id, byte[] image8bpp, int w, int h, int animIndex, int wf, int hf, int time,
-            CollisionType collision, Compression compression, OptimizationType opt, long optIteration)
+    public SpriteAnimation(String id, byte[] image8bpp, int w, int h, int animIndex, int wf, int hf, int[] time, CollisionType collision, Compression compression,
+            OptimizationType optType, OptimizationLevel optLevel, boolean optDuplicate)
     {
         super(id);
 
@@ -47,8 +50,25 @@ public class SpriteAnimation extends Resource
         // default loop index
         loopIndex = 0;
 
+        final Dimension imageDim = new Dimension(w * 8, h * 8);
         // get max number of frame
-        final int numFrame = w / wf;
+        final int maxFrame = w / wf;
+
+        // find last non transparent frame
+        int f = maxFrame - 1;
+        while (f >= 0)
+        {
+            // define frame bounds
+            final Rectangle frameBounds = new Rectangle((f * wf) * 8, (animIndex * hf) * 8, wf * 8, hf * 8);
+            // not transparent ? --> stop here
+            if (!ImageUtil.isTransparent(image8bpp, imageDim, frameBounds))
+                break;
+
+            f--;
+        }
+
+        // number of frame to process
+        final int numFrame = f + 1;
 
         for (int i = 0; i < numFrame; i++)
         {
@@ -57,61 +77,87 @@ public class SpriteAnimation extends Resource
             // get image for this frame
             final byte[] frameImage = ImageUtil.getSubImage(image8bpp, new Dimension(w * 8, h * 8), frameBounds);
 
-            // try to search for duplicated frame first
-            SpriteFrame frame = findExistingSpriteFrame(frameImage, frameBounds.getSize(), time, collision);
-
-            // not found ? --> define new frame
-            if (frame == null)
+            int duplicate = 0;
+            // duplicate optimization enabled ?
+            if (optDuplicate)
             {
-                frame = new SpriteFrame(id + "_frame" + i, frameImage, wf, hf, time, collision, compression, opt,
-                        optIteration);
+                // search for duplicate consecutive frames
+                for (int j = i + 1; j < numFrame; j++)
+                {
+                    final Rectangle nextBounds = new Rectangle((j * wf) * 8, (animIndex * hf) * 8, wf * 8, hf * 8);
+                    final byte[] nextImage = ImageUtil.getSubImage(image8bpp, new Dimension(w * 8, h * 8), nextBounds);
+    
+                    // different ? --> stop here
+                    if (!Arrays.equals(frameImage, nextImage))
+                        break;
+                    
+                    // found duplicate
+                    duplicate++;
+                }
+            }
+            
+            // try to search for a duplicated sprite mask so we can re-use the previous sprite cutting
+            SpriteFrame frame = findMatchingSpriteFrameMask(frameImage, frameBounds.getSize());
+            // found it ?
+            if (frame != null)
+            {
+            	// create sprite frame ('timer' is augmented by number of duplicate) and re-use previous sprite cutting
+            	frame = new SpriteFrame(id + "_frame" + i, frameImage, wf, hf, time[Math.min(time.length - 1, i)] * (duplicate + 1), collision, compression, frame.getSprites());
             }
             else
             {
-                System.out.println("Sprite frame at anim #" + animIndex + " frame #" + i + " is a duplicate of " + frame.id);
+            	// create sprite frame ('timer' is augmented by number of duplicate)
+            	frame = new SpriteFrame(id + "_frame" + i, frameImage, wf, hf, time[Math.min(time.length - 1, i)] * (duplicate + 1), collision, compression, optType, optLevel);
             }
+            // add as internal resource (get duplicate if exist)
+            frame = (SpriteFrame) addInternalResource(frame);
+            // bypass duplicates
+            i += duplicate;
 
-            // check if empty
-            if (!frame.isEmpty())
-            {
-                // add as internal resource (get duplicate if exist)
-                frame = (SpriteFrame) addInternalResource(frame);
-                // add frame
-                frames.add(frame);
-                frameSet.add(frame);
-            }
+            // add the new sprite frame
+            frames.add(frame);
+            frameSet.add(frame);
         }
 
         if (frames.size() > 255)
-            throw new IllegalArgumentException(
-                    "Sprite animation '" + id + "' has " + frames.size() + " frames (max = 255)");
+            throw new IllegalArgumentException("Sprite animation '" + id + "' has " + frames.size() + " frames (max = 255)");
 
         // compute hash code
         hc = loopIndex ^ frames.hashCode();
     }
 
-    private SpriteFrame findExistingSpriteFrame(byte[] frameImage, Dimension dimension, int time,
-            CollisionType collision)
+    private SpriteFrame findMatchingSpriteFrameMask(byte[] frameImage, Dimension dimension)
     {
         for (Resource res : Compiler.getResources(SpriteFrame.class))
         {
             final SpriteFrame spriteFrame = (SpriteFrame) res;
 
-            if (checkEqual(spriteFrame, frameImage, dimension, time, collision))
+            if (checkMaskEqual(spriteFrame, frameImage, dimension))
                 return spriteFrame;
         }
 
         return null;
     }
 
-    private boolean checkEqual(SpriteFrame spriteFrame, byte[] frameImage, Dimension dimension, int timer,
-            CollisionType collision)
+    private boolean checkMaskEqual(SpriteFrame spriteFrame, byte[] frameImage, Dimension dimension)
     {
-        return (SpriteFrame.computeFastHashcode(frameImage, dimension, timer, collision) == spriteFrame.fhc)
-                && Arrays.equals(frameImage, spriteFrame.frameImage)
-                && ((collision == spriteFrame.collisionType)
-                        || ((collision != null) && (collision.equals(spriteFrame.collisionType)))
-                                && (timer == spriteFrame.timer));
+    	if (!spriteFrame.frameDim.equals(dimension))
+    		return false;
+
+    	final byte[] frame1 = spriteFrame.frameImage;
+		final byte[] frame2 = frameImage;
+    	
+		if (frame1.length != frame2.length)
+    		return false;
+    	
+    	for(int i = 0; i < frame1.length; i++)
+    	{
+    		boolean p1 = frame1[i] != 0;
+    		boolean p2 = frame2[i] != 0;
+    		if (p1 != p2) return false;
+    	}
+    	
+    	return true;
     }
 
     public boolean isEmpty()
@@ -163,10 +209,15 @@ public class SpriteAnimation extends Resource
     }
 
     @Override
+    public List<Bin> getInternalBinResources()
+    {
+        return new ArrayList<>();
+    }
+
+    @Override
     public String toString()
     {
-        return id + ": numFrame=" + frames.size() + " maxNumTile=" + getMaxNumTile() + " maxNumSprite="
-                + getMaxNumSprite();
+        return id + ": numFrame=" + frames.size() + " maxNumTile=" + getMaxNumTile() + " maxNumSprite=" + getMaxNumSprite();
     }
 
     @Override

@@ -14,20 +14,46 @@
 #define PROCESS_PALETTE_FADING      (1 << 0)
 #define PROCESS_BITMAP_TASK         (1 << 1)
 #define PROCESS_DMA_TASK            (1 << 2)
-#define PROCESS_XGM_TASK            (1 << 3)
-#define PROCESS_VDP_SCROLL_TASK     (1 << 4)
+#define PROCESS_VDP_SCROLL_TASK     (1 << 3)
 
 
 #define ROM_ALIGN_BIT               17
 #define ROM_ALIGN                   (1 << ROM_ALIGN_BIT)
 #define ROM_ALIGN_MASK              (ROM_ALIGN - 1)
 
-#define ROM_START                   0
+#define ROM_START                   ROM
 #define ROM_END                     (((u32) &_stext) + ((u32) &_sdata))
 #define ROM_SIZE                    ((ROM_END + ROM_ALIGN_MASK) & (~ROM_ALIGN_MASK))
 
+/**
+ *  \brief
+ *      To force method inlining (not sure that GCC does actually care of it)
+ */
+#define FORCE_INLINE                inline __attribute__((always_inline))
 
-#define HINTERRUPT_CALLBACK         __attribute__ ((interrupt)) void
+/**
+ *  \brief
+ *      To force no inlining for this method
+ */
+#define NO_INLINE                   __attribute__((noinline))
+
+/**
+ *  \brief
+ *      Put function in .data (RAM) instead of the default .text
+ */
+#define RAM_SECT                    __attribute__((section(".ramprog")))
+
+/**
+ *  \brief
+ *      Declare function for the hint callback (generate a RTE to return from interrupt instead of RTS)
+ */
+#define HINTERRUPT_CALLBACK         __attribute__((interrupt)) void
+
+/**
+ *  \brief
+ *      Macro for packing structures and enumerates
+ */
+#define PACKED		                __attribute__((__packed__))
 
 
 // exist through rom_head.c
@@ -71,7 +97,7 @@ typedef enum
     ON_VBLANK_START     /** Start VBlank process on VBlank *start* period, means that we wait the next *start* of VBlank period if we missed it */
 } VBlankProcessTime;
 
-
+#if LEGACY_ERROR_HANDLER
 /**
  *  \brief
  *      Bus error interrupt callback.
@@ -142,6 +168,8 @@ extern VoidCallback *line1x1xCB;
  * You can modify it to use your own callback (for debug purpose).
  */
 extern VoidCallback *errorExceptionCB;
+#endif
+
 /**
  *  \brief
  *      Level interrupt callback.
@@ -211,7 +239,7 @@ bool SYS_doVBlankProcess(void);
  *      and the method was called from V-Int (vertical interrupt) callback in which case we exit the function
  *      as V-Int will be triggered immediately.<br>
  *
- * Do all the SGDK VBlank process.<br>
+ * Wait for Vblank and does all the SGDK VBlank process.<br>
  * Some specific processing should be done during the Vertical Blank period as the VDP is idle at this time.
  * This is always where we should do all VDP data transfer (using the DMA preferably) but we can also do the processes which
  * has to be done at a frame basis (joypad polling, sound driver sync/update..)<br>
@@ -223,6 +251,22 @@ bool SYS_doVBlankProcess(void);
  * Note that depending the used <i>time</i> parameter, VBlank process may be delayed to next VBlank so that will wause a frame miss.
  */
 bool SYS_doVBlankProcessEx(VBlankProcessTime processTime);
+
+/**
+ *  \brief
+ *      End the current frame (alias for #SYS_doVBlankProcess(void)).
+ *
+ *  End the current frame and does all the internal SGDK VBlank process (DMA flush, VDP data upload, async palette fade, scroll update..)
+ *
+ *  \see SYS_doVBlankProcess(void)
+ */
+bool SYS_nextFrame(void);
+
+/**
+ *  \brief
+ *      Returns the current value of the stack pointer register (A7)
+ */
+u32 SYS_getStackPointer();
 
 /**
  *  \brief
@@ -315,7 +359,7 @@ void SYS_setVBlankCallback(VoidCallback *CB);
 
 /**
  *  \brief
- *      Set 'Vertical Interrupt' callback method.
+ *      Set 'Vertical Interrupt' callback method, prefer #SYS_setVBlankCallback(..) when possible.
  *
  *  \param CB
  *      Pointer to the method to call on Vertical Interrupt.<br>
@@ -415,6 +459,13 @@ fix32 SYS_getFPSAsFloat(void);
 u16 SYS_getCPULoad(void);
 /**
  *  \brief
+ *      Returns TRUE if frame load is currently displayed, FALSE otherwise
+
+ * \see SYS_showFrameLoad(void)
+ */
+bool SYS_getShowFrameLoad();
+/**
+ *  \brief
  *      Show a cursor indicating current frame load level in scanline (top = 0% load, bottom = 100% load)
  *
  *  \param mean
@@ -435,7 +486,6 @@ void SYS_showFrameLoad(bool mean);
  */
 void SYS_hideFrameLoad(void);
 
-
 /**
  *  \brief
  *      Computes full ROM checksum and return it.<br>
@@ -451,10 +501,11 @@ bool SYS_isChecksumOk(void);
 /**
  *  \brief
  *      Die with the specified error message.<br>
- *      Program execution is interrupted.
+ *      Program execution is interrupted.<br>
+ *      Accepts a list of strings. The list must end with a NULL value.
  *
  * This actually display an error message and program ends execution.
  */
-void SYS_die(char *err);
+void SYS_die(char *err, ...);
 
 #endif // _SYS_H_

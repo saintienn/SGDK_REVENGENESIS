@@ -27,20 +27,20 @@
 				<Option object_output="out/" />
 				<Option type="1" />
 				<Option compiler="gcc" />
-				<Option parameters="bug.vgm out.xgc -v" />
+				<Option parameters="bug.vgm out.vgm -v" />
 				<Compiler>
 					<Add option="-Wall" />
 					<Add option="-g" />
 				</Compiler>
 			</Target>
 		</Build>
+		<Unit filename="inc/compress.h" />
 		<Unit filename="inc/gd3.h" />
+		<Unit filename="inc/lz77.h" />
 		<Unit filename="inc/psg.h" />
 		<Unit filename="inc/samplebank.h" />
 		<Unit filename="inc/util.h" />
-		<Unit filename="inc/vgm.h">
-			<Option target="&lt;{~None~}&gt;" />
-		</Unit>
+		<Unit filename="inc/vgm.h" />
 		<Unit filename="inc/vgmcom.h" />
 		<Unit filename="inc/xgc.h" />
 		<Unit filename="inc/xgccom.h" />
@@ -49,7 +49,13 @@
 		<Unit filename="inc/xgmsmp.h" />
 		<Unit filename="inc/xgmtool.h" />
 		<Unit filename="inc/ym2612.h" />
+		<Unit filename="src/compress.c">
+			<Option compilerVar="CC" />
+		</Unit>
 		<Unit filename="src/gd3.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="src/lz77.c">
 			<Option compilerVar="CC" />
 		</Unit>
 		<Unit filename="src/psg.c">

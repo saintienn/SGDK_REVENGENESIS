@@ -6,18 +6,23 @@ public class Basics
 {
     public static enum SoundDriver
     {
-        PCM, DPCM2, PCM4, XGM
+        PCM, DPCM2, PCM4, XGM, XGM2
     }
 
     public static enum Compression
     {
-        AUTO, NONE, APLIB, LZ4W
+        AUTO, NONE, APLIB, LZ4W, LITEPACK, MEGAPACK
     }
 
     public static enum TileOptimization
     {
         NONE, ALL, DUPLICATE_ONLY
     }
+
+    public static enum TileOrdering
+    {
+        ROW, COLUMN
+    };
 
     public static enum TileEquality
     {

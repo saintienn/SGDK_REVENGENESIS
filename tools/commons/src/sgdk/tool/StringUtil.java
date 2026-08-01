@@ -398,7 +398,18 @@ public class StringUtil
     }
 
     /**
-     * Try to parse a boolean from the specified String and return it.
+     * Checks if string matches format <digits><tag> (e.g. "125p").
+     * Tag comparison is case-sensitive. Returns false for invalid inputs.
+     */
+    public static boolean isTaggedNumber(String s, String tag) {
+        if (s == null || tag == null || StringUtil.isEmpty(s) || StringUtil.isEmpty(tag)) {
+            return false;
+        }
+        return s.matches("\\d+" + Pattern.quote(tag));
+    }
+    
+    /**
+     * Try to parse a boolean from the specified String and returns it.
      * Return 'def' is we can't parse any boolean from the string.
      */
     public static boolean parseBoolean(String s, boolean def)
@@ -417,7 +428,7 @@ public class StringUtil
     }
 
     /**
-     * Try to parse a integer from the specified String and return it.
+     * Try to parse a integer from the specified String and returns it.
      * Return 'def' is we can't parse any integer from the string.
      */
     public static int parseInt(String s, int def)
@@ -433,7 +444,7 @@ public class StringUtil
     }
 
     /**
-     * Try to parse a long integer from the specified String and return it.
+     * Try to parse a long integer from the specified String and returns it.
      * Return 'def' is we can't parse any integer from the string.
      */
     public static long parseLong(String s, long def)
@@ -449,7 +460,7 @@ public class StringUtil
     }
 
     /**
-     * Try to parse a float from the specified String and return it.
+     * Try to parse a float from the specified String and returns it.
      * Return 'def' is we can't parse any float from the string.
      */
     public static float parseFloat(String s, float def)
@@ -465,7 +476,7 @@ public class StringUtil
     }
 
     /**
-     * Try to parse a double from the specified String and return it.
+     * Try to parse a double from the specified String and returns it.
      * Return 'def' is we can't parse any double from the string.
      */
     public static double parseDouble(String s, double def)
@@ -481,7 +492,7 @@ public class StringUtil
     }
 
     /**
-     * Try to parse a array of byte from the specified String and return it.
+     * Try to parse a array of byte from the specified String and returns it.
      * Return 'def' is we can't parse any array of byte from the string.
      */
     public static byte[] parseBytes(String s, byte[] def)
@@ -491,7 +502,96 @@ public class StringUtil
 
         return s.getBytes();
     }
+    
+    /**
+     * Try to parse an array of int from the specified String and returns it.
+     * The array should be in the following format: [1,2,3,5]
+     * Return 'def' is we can't parse any int array from the string.
+     */
+    public static int[] parseIntArray(String s, int[] def)
+    {
+        if (s == null)
+            return def;
+        
+        try
+        {
+	        if (s.charAt(0) == '[')
+	        {
+	        	String[] arrayStr = s.substring(1, s.length() - 1).split(",");
+	        	int[] result = new int[arrayStr.length];
+	        	
+	        	for(int i = 0; i < arrayStr.length; i++)
+	        		result[i] = Integer.parseInt(arrayStr[i]);
+	        	
+	        	return result;
+	        }
+	        
+	        // assume single value as single entry array
+	        return new int[] { Integer.parseInt(s) };
+        }
+        catch (NumberFormatException E)
+        {
+            return def;
+        }
+    }
 
+    /**
+     * Try to parse a 2D array of int from the specified String and returns it.
+     * The array should be in the following format: [[1,2,3],[2,3,5,6],[7,6,5,4]]
+     * Return 'def' is we can't parse any 2D int array from the string.
+     */
+    public static int[][] parseIntArray2D(String s, int[][] def)
+    {
+        if (s == null)
+            return def;
+
+        try
+        {
+	        if (s.charAt(0) == '[')
+	        {
+	        	// remove surrounding '[]'
+	        	String ss = s.substring(1, s.length() - 1);
+	        	// remove all opening sub array '['
+	        	ss = ss.replaceAll("\\[", "");
+
+	        	// get all sub array
+	        	String[] arrayStr = ss.split("\\]");
+	        	int[][] result = new int[arrayStr.length][];
+	        	
+	        	for(int i = 0; i < arrayStr.length; i++)
+	        	{
+	        		// remove leading ',' if present
+	        		if (arrayStr[i].charAt(0) == ',') arrayStr[i] = arrayStr[i].substring(1);
+	        		// get sub array
+	        		result[i] = parseIntArray("[" + arrayStr[i] + "]", (def.length > i) ? def[i] : new int[] {0});
+	        	}
+	        	
+	        	return result;
+	        }
+	        
+	        // assume single value as single entry 2D array
+	        return new int[][] {{ Integer.parseInt(s) }};
+        }
+        catch (NumberFormatException E)
+        {
+            return def;
+        }
+    }
+        
+    /**
+     * Try to parse a tagged number from the string and return its integer value.
+     * The string should be in format: <digits><tag> (e.g. "125p")
+     * Returns 'def' if the string is invalid or doesn't match the format.
+     */
+    public static Integer parseTaggedInt(String s, String tag, int def)
+    {
+    	if (isTaggedNumber(s, tag)) {
+    		return Integer.parseInt(s.split(tag)[0]);
+    	}
+    	
+    	return def;
+    }
+    
     /**
      * Returns a <tt>String</tt> object representing the specified
      * boolean. If the specified boolean is <code>true</code>, then
@@ -553,6 +653,15 @@ public class StringUtil
             return toString(i);
 
         return Double.toString(value);
+    }
+
+    /**
+     * Returns a string representation of the <code>double</code> argument
+     * with specified number of decimal.
+     */
+    public static String toString(double value, int numDecimal)
+    {
+        return Double.toString(TypeUtil.round(value, numDecimal));
     }
 
     /**
@@ -691,8 +800,7 @@ public class StringUtil
      */
     public static boolean containHtmlCR(String text)
     {
-        return (text.indexOf("<br>") != -1) || (text.indexOf("<BR>") != -1) || (text.indexOf("<br/>") != -1)
-                || (text.indexOf("<BR/>") != -1);
+        return (text.indexOf("<br>") != -1) || (text.indexOf("<BR>") != -1) || (text.indexOf("<br/>") != -1) || (text.indexOf("<BR/>") != -1);
     }
 
     /**
@@ -721,8 +829,7 @@ public class StringUtil
 
             while (index != -1)
             {
-                result = result.substring(0, index) + "<b>" + result.substring(index, index + keywordLen) + "</b>"
-                        + result.substring(index + keywordLen);
+                result = result.substring(0, index) + "<b>" + result.substring(index, index + keywordLen) + "</b>" + result.substring(index + keywordLen);
 
                 if (ignoreCase)
                     index = result.toLowerCase().indexOf(key, index + keywordLen + 6);

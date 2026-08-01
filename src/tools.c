@@ -13,6 +13,10 @@
 #include "vdp.h"
 
 
+extern u32 mp_call_megaunp(const u8 *src, u8 *dest);
+extern u32 aplibx_unpack(const u8 *src, u8 *dest);
+
+
 // forward
 static u16 getBitmapAllocSize(const Bitmap *bitmap);
 static u16 getTileSetAllocSize(const TileSet *tileset);
@@ -21,44 +25,39 @@ static Bitmap *allocateBitmapInternal(void *adr);
 static TileSet *allocateTileSetInternal(void *adr);
 static TileMap *allocateTileMapInternal(void *adr);
 
-// internal
-u16 randbase;
+// default seed (can e done only once so initialized variable is ok)
+static u16 randbase = 0xC427;
+// needed for seed reset on player input
+bool randomSeedSet = FALSE;
 
 
-void setRandomSeed(u16 seed)
-{
+void setRandomSeed(u16 seed) {
     // xor it with a random value to avoid 0 value
     randbase = seed ^ 0xD94B;
+    randomSeedSet = TRUE;
 }
 
-u16 random()
-{
-    randbase ^= (randbase >> 1) ^ GET_HVCOUNTER;
-    randbase ^= (randbase << 1);
+u16 random() {
+    randbase ^= (randbase >> 5);
+    randbase ^= (randbase << 9);
+    randbase ^= (randbase >> 7);
 
     return randbase;
 }
 
-u32 getFPS()
-{
+u32 getFPS() {
     return SYS_getFPS();
 }
 
-fix32 getFPS_f()
-{
+fix32 getFPS_f() {
     return SYS_getFPSAsFloat();
 }
 
 
-#if (ENABLE_NEWLIB == 0)
-extern u16 vsprintf(char *buf, const char *fmt, va_list args);
-#endif  // ENABLE_NEWLIB
-
-u16 kprintf(const char *fmt, ...)
-{
+int kprintf(const char *fmt, ...) {
     char buffer[256];
     va_list args;
-    u16 i;
+    int i;
 
     va_start(args, fmt);
     i = vsprintf(buffer, fmt, args);
@@ -70,14 +69,12 @@ u16 kprintf(const char *fmt, ...)
 }
 
 
-void KLog(char* text)
-{
+void KLog(char* text) {
     if (*text == 0) KDebug_Alert(" ");
     else KDebug_Alert(text);
 }
 
-void KLog_U1(char* t1, u32 v1)
-{
+void KLog_U1(char* t1, u32 v1) {
     char str[256];
     char tmp[16];
 
@@ -88,8 +85,7 @@ void KLog_U1(char* t1, u32 v1)
     KDebug_Alert(str);
 }
 
-void KLog_U1_(char* t1, u32 v1, char* t2)
-{
+void KLog_U1_(char* t1, u32 v1, char* t2) {
     char str[256];
     char tmp[16];
 
@@ -101,8 +97,7 @@ void KLog_U1_(char* t1, u32 v1, char* t2)
     KDebug_Alert(str);
 }
 
-void KLog_U2(char* t1, u32 v1, char* t2, u32 v2)
-{
+void KLog_U2(char* t1, u32 v1, char* t2, u32 v2) {
     char str[256];
     char tmp[16];
 
@@ -116,8 +111,7 @@ void KLog_U2(char* t1, u32 v1, char* t2, u32 v2)
     KDebug_Alert(str);
 }
 
-void KLog_U2_(char* t1, u32 v1, char* t2, u32 v2, char* t3)
-{
+void KLog_U2_(char* t1, u32 v1, char* t2, u32 v2, char* t3) {
     char str[256];
     char tmp[16];
 
@@ -132,8 +126,7 @@ void KLog_U2_(char* t1, u32 v1, char* t2, u32 v2, char* t3)
     KDebug_Alert(str);
 }
 
-void KLog_U3(char* t1, u32 v1, char* t2, u32 v2, char* t3, u32 v3)
-{
+void KLog_U3(char* t1, u32 v1, char* t2, u32 v2, char* t3, u32 v3) {
     char str[256];
     char tmp[16];
 
@@ -150,8 +143,7 @@ void KLog_U3(char* t1, u32 v1, char* t2, u32 v2, char* t3, u32 v3)
     KDebug_Alert(str);
 }
 
-void KLog_U3_(char* t1, u32 v1, char* t2, u32 v2, char* t3, u32 v3, char *t4)
-{
+void KLog_U3_(char* t1, u32 v1, char* t2, u32 v2, char* t3, u32 v3, char *t4) {
     char str[256];
     char tmp[16];
 
@@ -169,8 +161,7 @@ void KLog_U3_(char* t1, u32 v1, char* t2, u32 v2, char* t3, u32 v3, char *t4)
     KDebug_Alert(str);
 }
 
-void KLog_U4(char* t1, u32 v1, char* t2, u32 v2, char* t3, u32 v3, char* t4, u32 v4)
-{
+void KLog_U4(char* t1, u32 v1, char* t2, u32 v2, char* t3, u32 v3, char* t4, u32 v4) {
     char str[256];
     char tmp[16];
 
@@ -190,8 +181,7 @@ void KLog_U4(char* t1, u32 v1, char* t2, u32 v2, char* t3, u32 v3, char* t4, u32
     KDebug_Alert(str);
 }
 
-void KLog_U4_(char* t1, u32 v1, char* t2, u32 v2, char* t3, u32 v3, char* t4, u32 v4, char* t5)
-{
+void KLog_U4_(char* t1, u32 v1, char* t2, u32 v2, char* t3, u32 v3, char* t4, u32 v4, char* t5) {
     char str[256];
     char tmp[16];
 
@@ -212,8 +202,7 @@ void KLog_U4_(char* t1, u32 v1, char* t2, u32 v2, char* t3, u32 v3, char* t4, u3
     KDebug_Alert(str);
 }
 
-void KLog_U1x(u16 minSize, char* t1, u32 v1)
-{
+void KLog_U1x(u16 minSize, char* t1, u32 v1) {
     char str[256];
     char tmp[16];
 
@@ -224,8 +213,7 @@ void KLog_U1x(u16 minSize, char* t1, u32 v1)
     KDebug_Alert(str);
 }
 
-void KLog_U1x_(u16 minSize, char* t1, u32 v1, char* t2)
-{
+void KLog_U1x_(u16 minSize, char* t1, u32 v1, char* t2) {
     char str[256];
     char tmp[16];
 
@@ -237,8 +225,7 @@ void KLog_U1x_(u16 minSize, char* t1, u32 v1, char* t2)
     KDebug_Alert(str);
 }
 
-void KLog_U2x(u16 minSize, char* t1, u32 v1, char* t2, u32 v2)
-{
+void KLog_U2x(u16 minSize, char* t1, u32 v1, char* t2, u32 v2) {
     char str[256];
     char tmp[16];
 
@@ -252,8 +239,7 @@ void KLog_U2x(u16 minSize, char* t1, u32 v1, char* t2, u32 v2)
     KDebug_Alert(str);
 }
 
-void KLog_U2x_(u16 minSize, char* t1, u32 v1, char* t2, u32 v2, char* t3)
-{
+void KLog_U2x_(u16 minSize, char* t1, u32 v1, char* t2, u32 v2, char* t3) {
     char str[256];
     char tmp[16];
 
@@ -268,8 +254,7 @@ void KLog_U2x_(u16 minSize, char* t1, u32 v1, char* t2, u32 v2, char* t3)
     KDebug_Alert(str);
 }
 
-void KLog_U3x(u16 minSize, char* t1, u32 v1, char* t2, u32 v2, char* t3, u32 v3)
-{
+void KLog_U3x(u16 minSize, char* t1, u32 v1, char* t2, u32 v2, char* t3, u32 v3) {
     char str[256];
     char tmp[16];
 
@@ -286,8 +271,7 @@ void KLog_U3x(u16 minSize, char* t1, u32 v1, char* t2, u32 v2, char* t3, u32 v3)
     KDebug_Alert(str);
 }
 
-void KLog_U3x_(u16 minSize, char* t1, u32 v1, char* t2, u32 v2, char* t3, u32 v3, char* t4)
-{
+void KLog_U3x_(u16 minSize, char* t1, u32 v1, char* t2, u32 v2, char* t3, u32 v3, char* t4) {
     char str[256];
     char tmp[16];
 
@@ -305,8 +289,7 @@ void KLog_U3x_(u16 minSize, char* t1, u32 v1, char* t2, u32 v2, char* t3, u32 v3
     KDebug_Alert(str);
 }
 
-void KLog_U4x(u16 minSize, char* t1, u32 v1, char* t2, u32 v2, char* t3, u32 v3, char* t4, u32 v4)
-{
+void KLog_U4x(u16 minSize, char* t1, u32 v1, char* t2, u32 v2, char* t3, u32 v3, char* t4, u32 v4) {
     char str[256];
     char tmp[16];
 
@@ -326,8 +309,7 @@ void KLog_U4x(u16 minSize, char* t1, u32 v1, char* t2, u32 v2, char* t3, u32 v3,
     KDebug_Alert(str);
 }
 
-void KLog_U4x_(u16 minSize, char* t1, u32 v1, char* t2, u32 v2, char* t3, u32 v3, char* t4, u32 v4, char* t5)
-{
+void KLog_U4x_(u16 minSize, char* t1, u32 v1, char* t2, u32 v2, char* t3, u32 v3, char* t4, u32 v4, char* t5) {
     char str[256];
     char tmp[16];
 
@@ -348,8 +330,7 @@ void KLog_U4x_(u16 minSize, char* t1, u32 v1, char* t2, u32 v2, char* t3, u32 v3
     KDebug_Alert(str);
 }
 
-void KLog_S1(char* t1, s32 v1)
-{
+void KLog_S1(char* t1, s32 v1) {
     char str[256];
     char tmp[16];
 
@@ -360,8 +341,7 @@ void KLog_S1(char* t1, s32 v1)
     KDebug_Alert(str);
 }
 
-void KLog_S1_(char* t1, s32 v1, char* t2)
-{
+void KLog_S1_(char* t1, s32 v1, char* t2) {
     char str[256];
     char tmp[16];
 
@@ -373,8 +353,7 @@ void KLog_S1_(char* t1, s32 v1, char* t2)
     KDebug_Alert(str);
 }
 
-void KLog_S2(char* t1, s32 v1, char* t2, s32 v2)
-{
+void KLog_S2(char* t1, s32 v1, char* t2, s32 v2) {
     char str[256];
     char tmp[16];
 
@@ -388,8 +367,7 @@ void KLog_S2(char* t1, s32 v1, char* t2, s32 v2)
     KDebug_Alert(str);
 }
 
-void KLog_S2_(char* t1, s32 v1, char* t2, s32 v2, char* t3)
-{
+void KLog_S2_(char* t1, s32 v1, char* t2, s32 v2, char* t3) {
     char str[256];
     char tmp[16];
 
@@ -404,8 +382,7 @@ void KLog_S2_(char* t1, s32 v1, char* t2, s32 v2, char* t3)
     KDebug_Alert(str);
 }
 
-void KLog_S3(char* t1, s32 v1, char* t2, s32 v2, char* t3, s32 v3)
-{
+void KLog_S3(char* t1, s32 v1, char* t2, s32 v2, char* t3, s32 v3) {
     char str[256];
     char tmp[16];
 
@@ -422,8 +399,7 @@ void KLog_S3(char* t1, s32 v1, char* t2, s32 v2, char* t3, s32 v3)
     KDebug_Alert(str);
 }
 
-void KLog_S3_(char* t1, s32 v1, char* t2, s32 v2, char* t3, s32 v3, char* t4)
-{
+void KLog_S3_(char* t1, s32 v1, char* t2, s32 v2, char* t3, s32 v3, char* t4) {
     char str[256];
     char tmp[16];
 
@@ -441,8 +417,7 @@ void KLog_S3_(char* t1, s32 v1, char* t2, s32 v2, char* t3, s32 v3, char* t4)
     KDebug_Alert(str);
 }
 
-void KLog_S4(char* t1, s32 v1, char* t2, s32 v2, char* t3, s32 v3, char* t4, s32 v4)
-{
+void KLog_S4(char* t1, s32 v1, char* t2, s32 v2, char* t3, s32 v3, char* t4, s32 v4) {
     char str[256];
     char tmp[16];
 
@@ -462,8 +437,7 @@ void KLog_S4(char* t1, s32 v1, char* t2, s32 v2, char* t3, s32 v3, char* t4, s32
     KDebug_Alert(str);
 }
 
-void KLog_S4_(char* t1, s32 v1, char* t2, s32 v2, char* t3, s32 v3, char* t4, s32 v4, char* t5)
-{
+void KLog_S4_(char* t1, s32 v1, char* t2, s32 v2, char* t3, s32 v3, char* t4, s32 v4, char* t5) {
     char str[256];
     char tmp[16];
 
@@ -484,8 +458,7 @@ void KLog_S4_(char* t1, s32 v1, char* t2, s32 v2, char* t3, s32 v3, char* t4, s3
     KDebug_Alert(str);
 }
 
-void KLog_S1x(u16 minSize, char* t1, s32 v1)
-{
+void KLog_S1x(u16 minSize, char* t1, s32 v1) {
     char str[256];
     char tmp[16];
 
@@ -496,8 +469,7 @@ void KLog_S1x(u16 minSize, char* t1, s32 v1)
     KDebug_Alert(str);
 }
 
-void KLog_S2x(u16 minSize, char* t1, s32 v1, char* t2, s32 v2)
-{
+void KLog_S2x(u16 minSize, char* t1, s32 v1, char* t2, s32 v2) {
     char str[256];
     char tmp[16];
 
@@ -511,8 +483,7 @@ void KLog_S2x(u16 minSize, char* t1, s32 v1, char* t2, s32 v2)
     KDebug_Alert(str);
 }
 
-void KLog_S3x(u16 minSize, char* t1, s32 v1, char* t2, s32 v2, char* t3, s32 v3)
-{
+void KLog_S3x(u16 minSize, char* t1, s32 v1, char* t2, s32 v2, char* t3, s32 v3) {
     char str[256];
     char tmp[16];
 
@@ -529,8 +500,7 @@ void KLog_S3x(u16 minSize, char* t1, s32 v1, char* t2, s32 v2, char* t3, s32 v3)
     KDebug_Alert(str);
 }
 
-void KLog_S4x(u16 minSize, char* t1, s32 v1, char* t2, s32 v2, char* t3, s32 v3, char* t4, s32 v4)
-{
+void KLog_S4x(u16 minSize, char* t1, s32 v1, char* t2, s32 v2, char* t3, s32 v3, char* t4, s32 v4) {
     char str[256];
     char tmp[16];
 
@@ -550,8 +520,7 @@ void KLog_S4x(u16 minSize, char* t1, s32 v1, char* t2, s32 v2, char* t3, s32 v3,
     KDebug_Alert(str);
 }
 
-void KLog_f1(char* t1, fix16 v1)
-{
+void KLog_f1(char* t1, fix16 v1) {
     char str[256];
     char tmp[16];
 
@@ -562,8 +531,7 @@ void KLog_f1(char* t1, fix16 v1)
     KDebug_Alert(str);
 }
 
-void KLog_f2(char* t1, fix16 v1, char* t2, fix16 v2)
-{
+void KLog_f2(char* t1, fix16 v1, char* t2, fix16 v2) {
     char str[256];
     char tmp[16];
 
@@ -577,8 +545,7 @@ void KLog_f2(char* t1, fix16 v1, char* t2, fix16 v2)
     KDebug_Alert(str);
 }
 
-void KLog_f3(char* t1, fix16 v1, char* t2, fix16 v2, char* t3, fix16 v3)
-{
+void KLog_f3(char* t1, fix16 v1, char* t2, fix16 v2, char* t3, fix16 v3) {
     char str[256];
     char tmp[16];
 
@@ -595,8 +562,7 @@ void KLog_f3(char* t1, fix16 v1, char* t2, fix16 v2, char* t3, fix16 v3)
     KDebug_Alert(str);
 }
 
-void KLog_f4(char* t1, fix16 v1, char* t2, fix16 v2, char* t3, fix16 v3, char* t4, fix16 v4)
-{
+void KLog_f4(char* t1, fix16 v1, char* t2, fix16 v2, char* t3, fix16 v3, char* t4, fix16 v4) {
     char str[256];
     char tmp[16];
 
@@ -616,8 +582,7 @@ void KLog_f4(char* t1, fix16 v1, char* t2, fix16 v2, char* t3, fix16 v3, char* t
     KDebug_Alert(str);
 }
 
-void KLog_f1x(s16 numDec, char* t1, fix16 v1)
-{
+void KLog_f1x(s16 numDec, char* t1, fix16 v1) {
     char str[256];
     char tmp[16];
 
@@ -628,8 +593,7 @@ void KLog_f1x(s16 numDec, char* t1, fix16 v1)
     KDebug_Alert(str);
 }
 
-void KLog_f2x(s16 numDec, char* t1, fix16 v1, char* t2, fix16 v2)
-{
+void KLog_f2x(s16 numDec, char* t1, fix16 v1, char* t2, fix16 v2) {
     char str[256];
     char tmp[16];
 
@@ -643,8 +607,7 @@ void KLog_f2x(s16 numDec, char* t1, fix16 v1, char* t2, fix16 v2)
     KDebug_Alert(str);
 }
 
-void KLog_f3x(s16 numDec, char* t1, fix16 v1, char* t2, fix16 v2, char* t3, fix16 v3)
-{
+void KLog_f3x(s16 numDec, char* t1, fix16 v1, char* t2, fix16 v2, char* t3, fix16 v3) {
     char str[256];
     char tmp[16];
 
@@ -661,8 +624,7 @@ void KLog_f3x(s16 numDec, char* t1, fix16 v1, char* t2, fix16 v2, char* t3, fix1
     KDebug_Alert(str);
 }
 
-void KLog_f4x(s16 numDec, char* t1, fix16 v1, char* t2, fix16 v2, char* t3, fix16 v3, char* t4, fix16 v4)
-{
+void KLog_f4x(s16 numDec, char* t1, fix16 v1, char* t2, fix16 v2, char* t3, fix16 v3, char* t4, fix16 v4) {
     char str[256];
     char tmp[16];
 
@@ -682,8 +644,7 @@ void KLog_f4x(s16 numDec, char* t1, fix16 v1, char* t2, fix16 v2, char* t3, fix1
     KDebug_Alert(str);
 }
 
-void KLog_F1(char* t1, fix32 v1)
-{
+void KLog_F1(char* t1, fix32 v1) {
     char str[256];
     char tmp[16];
 
@@ -694,8 +655,7 @@ void KLog_F1(char* t1, fix32 v1)
     KDebug_Alert(str);
 }
 
-void KLog_F2(char* t1, fix32 v1, char* t2, fix32 v2)
-{
+void KLog_F2(char* t1, fix32 v1, char* t2, fix32 v2) {
     char str[256];
     char tmp[16];
 
@@ -709,8 +669,7 @@ void KLog_F2(char* t1, fix32 v1, char* t2, fix32 v2)
     KDebug_Alert(str);
 }
 
-void KLog_F3(char* t1, fix32 v1, char* t2, fix32 v2, char* t3, fix32 v3)
-{
+void KLog_F3(char* t1, fix32 v1, char* t2, fix32 v2, char* t3, fix32 v3) {
     char str[256];
     char tmp[16];
 
@@ -727,8 +686,7 @@ void KLog_F3(char* t1, fix32 v1, char* t2, fix32 v2, char* t3, fix32 v3)
     KDebug_Alert(str);
 }
 
-void KLog_F4(char* t1, fix32 v1, char* t2, fix32 v2, char* t3, fix32 v3, char* t4, fix32 v4)
-{
+void KLog_F4(char* t1, fix32 v1, char* t2, fix32 v2, char* t3, fix32 v3, char* t4, fix32 v4) {
     char str[256];
     char tmp[16];
 
@@ -748,8 +706,7 @@ void KLog_F4(char* t1, fix32 v1, char* t2, fix32 v2, char* t3, fix32 v3, char* t
     KDebug_Alert(str);
 }
 
-void KLog_F1x(s16 numDec, char* t1, fix32 v1)
-{
+void KLog_F1x(s16 numDec, char* t1, fix32 v1) {
     char str[256];
     char tmp[16];
 
@@ -760,8 +717,7 @@ void KLog_F1x(s16 numDec, char* t1, fix32 v1)
     KDebug_Alert(str);
 }
 
-void KLog_F2x(s16 numDec, char* t1, fix32 v1, char* t2, fix32 v2)
-{
+void KLog_F2x(s16 numDec, char* t1, fix32 v1, char* t2, fix32 v2) {
     char str[256];
     char tmp[16];
 
@@ -775,8 +731,7 @@ void KLog_F2x(s16 numDec, char* t1, fix32 v1, char* t2, fix32 v2)
     KDebug_Alert(str);
 }
 
-void KLog_F3x(s16 numDec, char* t1, fix32 v1, char* t2, fix32 v2, char* t3, fix32 v3)
-{
+void KLog_F3x(s16 numDec, char* t1, fix32 v1, char* t2, fix32 v2, char* t3, fix32 v3) {
     char str[256];
     char tmp[16];
 
@@ -793,8 +748,7 @@ void KLog_F3x(s16 numDec, char* t1, fix32 v1, char* t2, fix32 v2, char* t3, fix3
     KDebug_Alert(str);
 }
 
-void KLog_F4x(s16 numDec, char* t1, fix32 v1, char* t2, fix32 v2, char* t3, fix32 v3, char* t4, fix32 v4)
-{
+void KLog_F4x(s16 numDec, char* t1, fix32 v1, char* t2, fix32 v2, char* t3, fix32 v3, char* t4, fix32 v4) {
     char str[256];
     char tmp[16];
 
@@ -815,29 +769,24 @@ void KLog_F4x(s16 numDec, char* t1, fix32 v1, char* t2, fix32 v2, char* t3, fix3
 }
 
 
-static u16 getBitmapAllocSize(const Bitmap *bitmap)
-{
+static u16 getBitmapAllocSize(const Bitmap *bitmap) {
     return (bitmap->w * bitmap->h) / 2;
 }
 
-static u16 getTileSetAllocSize(const TileSet *tileset)
-{
+static u16 getTileSetAllocSize(const TileSet *tileset) {
     return tileset->numTile * 32;
 }
 
-static u16 getTileMapAllocSize(const TileMap *tilemap)
-{
+static u16 getTileMapAllocSize(const TileMap *tilemap) {
     return tilemap->w * tilemap->h * 2;
 }
 
 
-static Bitmap *allocateBitmapInternal(void *adr)
-{
+static Bitmap *allocateBitmapInternal(void *adr) {
     // cast
     Bitmap *result = (Bitmap*) adr;
 
-    if (result != NULL)
-    {
+    if (result != NULL) {
         result->compression = COMPRESSION_NONE;
         // allocate image buffer
         result->image = (u8*) (adr + sizeof(Bitmap));
@@ -846,13 +795,11 @@ static Bitmap *allocateBitmapInternal(void *adr)
     return result;
 }
 
-static TileSet *allocateTileSetInternal(void *adr)
-{
+static TileSet *allocateTileSetInternal(void *adr) {
     // cast
     TileSet *result = (TileSet*) adr;
 
-    if (result != NULL)
-    {
+    if (result != NULL) {
         result->compression = COMPRESSION_NONE;
         // allocate tiles buffer
         result->tiles = (u32*) (adr + sizeof(TileSet));
@@ -861,13 +808,11 @@ static TileSet *allocateTileSetInternal(void *adr)
     return result;
 }
 
-static TileMap *allocateTileMapInternal(void *adr)
-{
+static TileMap *allocateTileMapInternal(void *adr) {
     // cast
     TileMap *result = (TileMap*) adr;
 
-    if (result != NULL)
-    {
+    if (result != NULL) {
         result->compression = COMPRESSION_NONE;
         // allocate tilemap buffer
         result->tilemap = (u16*) (adr + sizeof(TileMap));
@@ -877,19 +822,16 @@ static TileMap *allocateTileMapInternal(void *adr)
 }
 
 
-Bitmap *allocateBitmap(const Bitmap *bitmap)
-{
+Bitmap *allocateBitmap(const Bitmap *bitmap) {
     return allocateBitmapInternal(MEM_alloc(getBitmapAllocSize(bitmap) + sizeof(Bitmap)));
 }
 
-Bitmap *allocateBitmapEx(u16 width, u16 heigth)
-{
+Bitmap *allocateBitmapEx(u16 width, u16 heigth) {
     // allocate
     void *adr = MEM_alloc(((width * heigth) / 2) + sizeof(Bitmap));
     Bitmap *result = (Bitmap*) adr;
 
-    if (result != NULL)
-    {
+    if (result != NULL) {
         result->compression = COMPRESSION_NONE;
         // set image pointer
         result->image = (u8*) (adr + sizeof(Bitmap));
@@ -898,19 +840,16 @@ Bitmap *allocateBitmapEx(u16 width, u16 heigth)
     return result;
 }
 
-TileSet *allocateTileSet(const TileSet *tileset)
-{
+TileSet *allocateTileSet(const TileSet *tileset) {
     return allocateTileSetInternal(MEM_alloc(getTileSetAllocSize(tileset) + sizeof(TileSet)));
 }
 
-TileSet *allocateTileSetEx(u16 numTile)
-{
+TileSet *allocateTileSetEx(u16 numTile) {
     // allocate
     void *adr = MEM_alloc((numTile * 32) + sizeof(TileSet));
     TileSet *result = (TileSet*) adr;
 
-    if (result != NULL)
-    {
+    if (result != NULL) {
         result->compression = COMPRESSION_NONE;
         // set tiles pointer
         result->tiles = (u32*) (adr + sizeof(TileSet));
@@ -921,19 +860,16 @@ TileSet *allocateTileSetEx(u16 numTile)
     return result;
 }
 
-TileMap *allocateTileMap(const TileMap *tilemap)
-{
+TileMap *allocateTileMap(const TileMap *tilemap) {
     return allocateTileMapInternal(MEM_alloc(getTileMapAllocSize(tilemap) + sizeof(TileMap)));
 }
 
-TileMap *allocateTileMapEx(u16 width, u16 heigth)
-{
+TileMap *allocateTileMapEx(u16 width, u16 heigth) {
     // allocate
     void *adr = MEM_alloc((width * heigth * 2) + sizeof(TileMap));
     TileMap *result = (TileMap*) adr;
 
-    if (result != NULL)
-    {
+    if (result != NULL) {
         result->compression = COMPRESSION_NONE;
         // set tilemap pointer
         result->tilemap = (u16*) (adr + sizeof(TileMap));
@@ -945,8 +881,7 @@ TileMap *allocateTileMapEx(u16 width, u16 heigth)
     return result;
 }
 
-Image *allocateImage(const Image *image)
-{
+Image *allocateImage(const Image *image) {
     TileSet *tileset = image->tileset;
     TileMap *tilemap = image->tilemap;
 
@@ -959,8 +894,7 @@ Image *allocateImage(const Image *image)
     // cast
     Image *result = (Image*) adr;
 
-    if (result != NULL)
-    {
+    if (result != NULL) {
         // allocate tileset buffer
         result->tileset = allocateTileSetInternal((void*) (adr + sizeof(Image)));
         // allocate tilemap buffer
@@ -970,37 +904,41 @@ Image *allocateImage(const Image *image)
     return result;
 }
 
-Map *allocateMap(const MapDefinition *mapDef)
-{
+Map *allocateMap(const MapDefinition *mapDef) {
     u16 baseSize = sizeof(Map);
+    u16 compression = mapDef->compression;
+
     u16 metaTilesSize;
     u16 blocksSize;
     u16 blockIndexesSize;
 
-    // need to allocate memory for packed data buffers
-    if (mapDef->compression != COMPRESSION_NONE)
-    {
-        metaTilesSize = mapDef->numMetaTile * 4 * 2;
+    // metaTiles compression
+    if (((compression >> 0) & 0xF) != COMPRESSION_NONE) metaTilesSize = mapDef->numMetaTile * 4 * 2;
+    // use direct reference
+    else metaTilesSize = 0;
+
+    // blocks data compression
+    if (((compression >> 4) & 0xF) != COMPRESSION_NONE) {
         blocksSize = mapDef->numBlock * 8 * 8;
         if (mapDef->numMetaTile > 256) blocksSize *= 2;
+    }
+    // use direct reference
+    else blocksSize = 0;
+
+    // blocks indexes data compression
+    if (((compression >> 8) & 0xF) != COMPRESSION_NONE) {
         blockIndexesSize = mapDef->w * mapDef->hp;
         if (mapDef->numBlock > 256) blockIndexesSize *= 2;
     }
-    else
-    {
-        // can use direct reference
-        metaTilesSize = 0;
-        blocksSize = 0;
-        blockIndexesSize = 0;
-    }
+    // use direct reference
+    else blockIndexesSize = 0;
 
     const void *adr = MEM_alloc(baseSize + metaTilesSize + blocksSize + blockIndexesSize);
 
     // cast
     Map *result = (Map*) adr;
 
-    if (result != NULL)
-    {
+    if (result != NULL) {
         // allocate metaTiles buffer
         result->metaTiles = (void*) (adr + baseSize);
         // allocate blocks buffer
@@ -1013,15 +951,13 @@ Map *allocateMap(const MapDefinition *mapDef)
 }
 
 
-Bitmap *unpackBitmap(const Bitmap *src, Bitmap *dest)
-{
+Bitmap *unpackBitmap(const Bitmap *src, Bitmap *dest) {
     Bitmap *result;
 
     if (dest) result = dest;
     else result = allocateBitmap(src);
 
-    if (result != NULL)
-    {
+    if (result != NULL) {
         // fill infos (always use shallow copy for palette)
         result->w = src->w;
         result->h = src->h;
@@ -1032,8 +968,7 @@ Bitmap *unpackBitmap(const Bitmap *src, Bitmap *dest)
         if (src->compression != COMPRESSION_NONE)
             unpack(src->compression, (u8*) FAR_SAFE(src->image, (src->w * src->h) / 2), (u8*) result->image);
         // simple copy if needed
-        else if (src->image != result->image)
-        {
+        else if (src->image != result->image) {
             const u16 size = (src->w * src->h) / 2;
             memcpy((u8*) result->image, FAR_SAFE(src->image, size), size);
         }
@@ -1042,15 +977,13 @@ Bitmap *unpackBitmap(const Bitmap *src, Bitmap *dest)
     return result;
 }
 
-TileSet *unpackTileSet(const TileSet *src, TileSet *dest)
-{
+TileSet *unpackTileSet(const TileSet *src, TileSet *dest) {
     TileSet *result;
 
     if (dest) result = dest;
     else result = allocateTileSet(src);
 
-    if (result != NULL)
-    {
+    if (result != NULL) {
         // fill infos
         result->numTile = src->numTile;
         result->compression = COMPRESSION_NONE;
@@ -1059,8 +992,7 @@ TileSet *unpackTileSet(const TileSet *src, TileSet *dest)
         if (src->compression != COMPRESSION_NONE)
             unpack(src->compression, (u8*) FAR_SAFE(src->tiles, src->numTile * 32), (u8*) result->tiles);
         // simple copy if needed
-        else if (src->tiles != result->tiles)
-        {
+        else if (src->tiles != result->tiles) {
             const u16 size = src->numTile * 32;
             memcpy((u8*) result->tiles, FAR_SAFE(src->tiles, size), size);
         }
@@ -1069,15 +1001,13 @@ TileSet *unpackTileSet(const TileSet *src, TileSet *dest)
     return result;
 }
 
-TileMap *unpackTileMap(const TileMap *src, TileMap *dest)
-{
+TileMap *unpackTileMap(const TileMap *src, TileMap *dest) {
     TileMap *result;
 
     if (dest) result = dest;
     else result = allocateTileMap(src);
 
-    if (result != NULL)
-    {
+    if (result != NULL) {
         // fill infos
         result->w = src->w;
         result->h = src->h;
@@ -1087,8 +1017,7 @@ TileMap *unpackTileMap(const TileMap *src, TileMap *dest)
         if (src->compression != COMPRESSION_NONE)
             unpack(src->compression, (u8*) FAR_SAFE(src->tilemap, (src->w * src->h) * 2), (u8*) result->tilemap);
         // simple copy if needed
-        else if (src->tilemap != result->tilemap)
-        {
+        else if (src->tilemap != result->tilemap) {
             const u16 size = (src->w * src->h) * 2;
             memcpy((u8*) result->tilemap, FAR_SAFE(src->tilemap, size), size);
         }
@@ -1097,15 +1026,13 @@ TileMap *unpackTileMap(const TileMap *src, TileMap *dest)
     return result;
 }
 
-Image *unpackImage(const Image *src, Image *dest)
-{
+Image *unpackImage(const Image *src, Image *dest) {
     Image *result;
 
     if (dest) result = dest;
     else result = allocateImage(src);
 
-    if (result != NULL)
-    {
+    if (result != NULL) {
         // fill infos (always use shallow copy for palette)
         result->palette = src->palette;
 
@@ -1121,28 +1048,34 @@ Image *unpackImage(const Image *src, Image *dest)
 }
 
 
-u32 unpack(u16 compression, u8 *src, u8 *dest)
-{
-    switch(compression)
-    {
-//        case COMPRESSION_NONE:
-//            // cannot do anything...
-//            if (size == 0) return FALSE;
-//
-//            // use simple memory copy
-//            memcpy(dest, &src[offset], size);
-//            break;
+u32 unpack(u16 compression, u8 *src, u8 *dest) {
 
-        case COMPRESSION_APLIB:
-            return aplib_unpack(src, dest);
+    switch(compression) {
+    case COMPRESSION_APLIB:
 
-        case COMPRESSION_LZ4W:
-            return lz4w_unpack(src, dest);
+        return aplibx_unpack(src, dest);
 
-        default:
-            return 0;
+    case COMPRESSION_LZ4W:
+
+        return lz4w_unpack(src, dest);
+
+    case COMPRESSION_LITEPACK:
+
+        return litepack_unpack(src, dest);
+
+    case COMPRESSION_MEGAPACK:
+
+        return mp_call_megaunp(src, dest);
+
+    default:
+        return 0;
     }
 }
+
+
+
+
+
 
 
 #define QSORT(type)                                     \

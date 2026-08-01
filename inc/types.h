@@ -32,52 +32,45 @@
 #define NULL    0
 #endif
 
-#ifndef MIN_U8
-#define MIN_U8  0x00
+#ifndef U8_MIN
+#define U8_MIN  ((u8) 0x00)
 #endif
-#ifndef MAX_U8
-#define MAX_U8  0xFF
+#ifndef U8_MAX
+#define U8_MAX  ((u8) 0xFF)
 #endif
-#ifndef MIN_S8
-#define MIN_S8  -0x80
+#ifndef S8_MIN
+#define S8_MIN  ((s8) (-0x80))
 #endif
-#ifndef MAX_S8
-#define MAX_S8  0x7F
-#endif
-
-#ifndef MIN_U16
-#define MIN_U16 0x0000
-#endif
-#ifndef MAX_U16
-#define MAX_U16 0xFFFF
-#endif
-#ifndef MIN_S16
-#define MIN_S16 -0x8000
-#endif
-#ifndef MAX_S16
-#define MAX_S16 0x7FFF
+#ifndef S8_MAX
+#define S8_MAX  ((s8) 0x7F)
 #endif
 
-#ifndef MIN_U32
-#define MIN_U32 0x0000
+#ifndef U16_MIN
+#define U16_MIN ((u16) 0x0000)
 #endif
-#ifndef MAX_U32
-#define MAX_U32 0xFFFFFFFF
+#ifndef U16_MAX
+#define U16_MAX ((u16) 0xFFFF)
 #endif
-#ifndef MIN_S32
-#define MIN_S32 -0x80000000
+#ifndef S16_MIN
+#define S16_MIN ((s16) (-0x8000))
 #endif
-#ifndef MAX_S32
-#define MAX_S32 0x7FFFFFFF
+#ifndef S16_MAX
+#define S16_MAX ((s16) 0x7FFF)
 #endif
 
+#ifndef U32_MIN
+#define U32_MIN ((u32) 0x00000000)
+#endif
+#ifndef U32_MAX
+#define U32_MAX ((u32) 0xFFFFFFFF)
+#endif
+#ifndef S32_MIN
+#define S32_MIN ((s32) (-0x80000000))
+#endif
+#ifndef S32_MAX
+#define S32_MAX ((s32) 0x7FFFFFFF)
+#endif
 
-/**
- *  \typedef bool
- *      boolean type, to be used with TRUE and FALSE constant.
- *      (internally set as unsigned short)
- */
-typedef unsigned short bool;
 
 /**
  *  \typedef s8
@@ -112,11 +105,37 @@ typedef unsigned short u16;
 typedef unsigned long u32;
 
 /**
- *  \typedef vbool
- *      volatile boolean type.
- *      (internally set as volatile unsigned short)
+ *  \typedef size_t
+ *      size type (equivalent to unsigned long).
  */
-typedef volatile u16 vbool;
+ typedef unsigned long size_t;
+
+
+#if !defined(__cplusplus) && (!defined(__STDC_VERSION__) || (__STDC_VERSION__ < 202300L))
+
+/**
+ *  \typedef bool
+ *      boolean type, to be used with TRUE/true and FALSE/false constants.
+ *      (internally set as unsigned char)
+ */
+typedef u8 bool;
+/**
+ *  \brief
+ *      false define (equivalent to 0).
+ */
+#ifndef false
+#define false   FALSE
+#endif
+/**
+ *  \brief
+ *      true define (equivalent to 1).
+ */
+#ifndef true
+#define true    TRUE
+#endif
+
+#endif
+
 /**
  *  \typedef vs8
  *      volatile 8 bits signed integer.
@@ -149,6 +168,20 @@ typedef volatile u16 vu16;
  */
 typedef volatile u32 vu32;
 
+/**
+ *  \typedef vbool
+ *      volatile boolean type.
+ *      (internally set as volatile unsigned char)
+ */
+typedef vu8 vbool;
+
+/**
+ *  \typedef p16
+ *      short pointer for fast 16 bit addressing (GCC does correctly cast that to pointer).
+ *      Limited to 0xFFFF8000-0x00007FFF memory region (first 32KB bank of ROM, and last 32KB of RAM)
+ */
+typedef s16 p16;
+
 
 #if !defined(uint8_t) && !defined(__int8_t_defined)
 #define uint8_t     u8
@@ -162,50 +195,76 @@ typedef volatile u32 vu32;
 #define uint32_t    u32
 #define int32_t     s32
 #endif
+#if !defined(size_t)
+#define size_t      u32
+#endif
+#if !defined(ptrdiff_t)
+#define ptrdiff_t   u32
+#endif
 
 
 /**
  *  \typedef fix16
- *      16 bits fixed point type.
+ *      16 bits fixed point (10.6) type
  */
 typedef s16 fix16;
 /**
  *  \typedef fix32
- *      32 bits fixed point type.
+ *      32 bits fixed point (22.10) type
  */
 typedef s32 fix32;
 /**
  *  \typedef f16
- *      16 bits fixed point type (short version).
+ *      16 bits fixed point (10.6) type - short version
  */
 typedef s16 f16;
 /**
  *  \typedef f32
- *      32 bits fixed point type (short version).
+ *      32 bits fixed point (22.10) type - short version
  */
 typedef s32 f32;
 
 /**
+ *  \typedef fastfix16
+ *      "fast" 16 bits fixed point (8.8) type
+ */
+typedef s16 fastfix16;
+/**
+ *  \typedef fastfix32
+ *      "fast" 32 bits fixed point (16.16) type
+ */
+typedef s32 fastfix32;
+/**
+ *  \typedef ff16
+ *      "fast" 16 bits fixed point (8.8) type - short version
+ */
+typedef s16 ff16;
+/**
+ *  \typedef ff32
+ *      "fast" 32 bits fixed point (16.16) type - short version
+ */
+typedef s32 ff32;
+
+/**
  *  \typedef vfix16
- *      volatile 16 bits fixed point type.
+ *      volatile 16 bits fixed point (10.6) type.
  */
 typedef vs16 vfix16;
 /**
  *  \typedef vfix32
- *      volatile 32 bits fixed point type.
+ *      volatile 32 bits fixed point (22.10) type.
  */
 typedef vs32 vfix32;
 /**
  *  \typedef vf16
- *      volatile 16 bits fixed point type (short version).
+ *      volatile 16 bits fixed point (10.6) type - short version
  */
 typedef vs16 vf16;
 /**
  *  \typedef vf32
- *      volatile 32 bits fixed point type (short version).
+ *      volatile 32 bits fixed point (22.10) type - short version
  */
 typedef vs32 vf32;
-
 
 
 #define FASTCALL
@@ -256,67 +315,6 @@ typedef void VoidCallback(void);
 u8  getZeroU8(void);
 u16 getZeroU16(void);
 u32 getZeroU32(void);
-
-/**
- *  \brief
- *      ROL instruction for byte (8 bit) value
- *
- *  \param value
- *      value to apply bit rotation
- *  \param number
- *      number of bit rotation
- */
-u8  rol8(u8 value, u16 number);
-/**
- *  \brief
- *      ROL instruction for short (16 bit) value
- *
- *  \param value
- *      value to apply bit rotation
- *  \param number
- *      number of bit rotation
- */
-u16 rol16(u16 value, u16 number);
-/**
- *  \brief
- *      ROL instruction for long (32 bit) value
- *
- *  \param value
- *      value to apply bit rotation
- *  \param number
- *      number of bit rotation
- */
-u32 rol32(u32 value, u16 number);
-/**
- *  \brief
- *      ROR instruction for byte (8 bit) value
- *
- *  \param value
- *      value to apply bit rotation
- *  \param number
- *      number of bit rotation
- */
-u8  ror8(u8 value, u16 number);
-/**
- *  \brief
- *      ROR instruction for short (16 bit) value
- *
- *  \param value
- *      value to apply bit rotation
- *  \param number
- *      number of bit rotation
- */
-u16 ror16(u16 value, u16 number);
-/**
- *  \brief
- *      ROR instruction for long (32 bit) value
- *
- *  \param value
- *      value to apply bit rotation
- *  \param number
- *      number of bit rotation
- */
-u32 ror32(u32 value, u16 number);
 
 
 #endif // _TYPES_H_

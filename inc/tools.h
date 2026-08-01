@@ -11,6 +11,7 @@
 #define _TOOLS_H_
 
 #include "bmp.h"
+#include "vdp.h"
 #include "vdp_tile.h"
 #include "vdp_bg.h"
 #include "map.h"
@@ -32,6 +33,29 @@
  */
 #define COMPRESSION_LZ4W        2
 
+/**
+ *  \brief
+ *      Use LITEPACK compression scheme.
+ */
+#define COMPRESSION_LITEPACK    3
+
+/**
+ *  \brief
+ *      Use MEGAPACK compression scheme.
+ */
+#define COMPRESSION_MEGAPACK    4
+
+/**
+ *  \brief
+ *      Simple cycle counter tool from BlastEm - start cycle count (see #BLASTEM_PROFIL_END)
+ */
+#define BLASTEM_PROFIL_START    VDP_setReg(0x9F, 0xC0);
+/**
+ *  \brief
+ *      Simple cycle counter tool from BlastEm - stop cycle count and display result in console
+ */
+#define BLASTEM_PROFIL_END      VDP_setReg(0x9F, 0x00);
+
 
 /**
  *  \brief
@@ -46,9 +70,11 @@
 typedef s16 _comparatorCallback(void* o1, void* o2);
 
 
+
+
 /**
  *  \brief
- *      Set the randomizer seed (to allow reproductible value if we are lucky with HV counter :p)
+ *      Set the randomizer seed (to allow different reproductible series)
  */
 void setRandomSeed(u16 seed);
 /**
@@ -82,7 +108,7 @@ u16 random(void);
  *  Note that internally a buffer of 255 characters is allocated so consider this limitation !
  *
  */
-u16 kprintf(const char *fmt, ...) __attribute__ ((format (printf, 1, 2)));
+int kprintf(const char *fmt, ...) __attribute__ ((format (printf, 1, 2)));
 
 /**
  *  \brief
@@ -344,6 +370,35 @@ u32 aplib_unpack(u8 *src, u8 *dest);
  *      Unpacked size.
  */
 u32 lz4w_unpack(const u8 *src, u8 *dest);
+
+/**
+ *  \brief
+ *      Unpack (MEGAPACK) the specified source data buffer in the specified destination buffer.
+ *
+ *  \param src
+ *      Source data buffer containing the packed data (MEGAPACK packed) to unpack.
+ *  \param dest
+ *      Destination buffer where to store unpacked data, be sure to allocate enough space.<br>
+ *      The size of unpacked data is contained in the first 4 bytes of 'src'.
+ *  \return
+ *      Unpacked size.
+ */
+u32 megapack_unpack(u8 *src, u8 *dest);
+
+
+/**
+ *  \brief
+ *      Unpack (LITEPACK) the specified source data buffer in the specified destination buffer.
+ *
+ *  \param src
+ *      Source data buffer containing the packed data (LITEPACK packed) to unpack.
+ *  \param dest
+ *      Destination buffer where to store unpacked data, be sure to allocate enough space.<br>
+ *      The size of unpacked data is contained in the first 4 bytes of 'src'.
+ *  \return
+ *      Unpacked size.
+ */
+u32 litepack_unpack(const u8 *src, u8 *dest);
 
 
 /**

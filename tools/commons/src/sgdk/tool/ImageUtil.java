@@ -14,17 +14,25 @@ import java.awt.image.BufferedImage;
 import java.awt.image.ColorModel;
 import java.awt.image.DataBuffer;
 import java.awt.image.DataBufferByte;
+import java.awt.image.DataBufferInt;
 import java.awt.image.IndexColorModel;
 import java.awt.image.Raster;
 import java.awt.image.RenderedImage;
 import java.awt.image.WritableRaster;
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import javax.imageio.ImageIO;
 
@@ -127,8 +135,7 @@ public class ImageUtil
      */
     public static BufferedImage createIndexedImage(int w, int h, IndexColorModel cm, byte[] data)
     {
-        final WritableRaster raster = Raster.createInterleavedRaster(new DataBufferByte(data, w * h, 0), w, h, w, 1,
-                new int[] {0}, null);
+        final WritableRaster raster = Raster.createInterleavedRaster(new DataBufferByte(data, w * h, 0), w, h, w, 1, new int[] {0}, null);
 
         return new BufferedImage(cm, raster, false, null);
     }
@@ -313,8 +320,7 @@ public class ImageUtil
 
         // be sure image data are ready
         waitImageReady(image);
-        final BufferedImage bufImage = new BufferedImage(image.getWidth(null), image.getHeight(null),
-                BufferedImage.TYPE_INT_ARGB);
+        final BufferedImage bufImage = new BufferedImage(image.getWidth(null), image.getHeight(null), BufferedImage.TYPE_INT_ARGB);
 
         final Graphics2D g = bufImage.createGraphics();
         g.drawImage(image, 0, 0, null);
@@ -326,7 +332,7 @@ public class ImageUtil
     /**
      * Scale an image with specified size.
      */
-    public static BufferedImage scale(Image image, int width, int height)
+    public static BufferedImage scale(Image image, int width, int height, boolean filter)
     {
         if (image != null)
         {
@@ -334,7 +340,7 @@ public class ImageUtil
             final Graphics2D g = result.createGraphics();
 
             g.setComposite(AlphaComposite.Src);
-            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, filter ? RenderingHints.VALUE_INTERPOLATION_BILINEAR : RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
             g.drawImage(image, 0, 0, width, height, null);
             g.dispose();
 
@@ -342,6 +348,14 @@ public class ImageUtil
         }
 
         return null;
+    }
+
+    /**
+     * Scale an image with specified size.
+     */
+    public static BufferedImage scale(Image image, int width, int height)
+    {
+    	return scale(image, width, height, true);
     }
 
     /**
@@ -462,8 +476,7 @@ public class ImageUtil
         {
             // be sure image data are ready
             waitImageReady(image);
-            return convert(image,
-                    new BufferedImage(image.getWidth(null), image.getHeight(null), BufferedImage.TYPE_BYTE_GRAY));
+            return convert(image, new BufferedImage(image.getWidth(null), image.getHeight(null), BufferedImage.TYPE_BYTE_GRAY));
         }
 
         return null;
@@ -478,8 +491,7 @@ public class ImageUtil
         {
             // be sure image data are ready
             waitImageReady(image);
-            return convert(image,
-                    new BufferedImage(image.getWidth(null), image.getHeight(null), BufferedImage.TYPE_INT_RGB));
+            return convert(image, new BufferedImage(image.getWidth(null), image.getHeight(null), BufferedImage.TYPE_INT_RGB));
         }
 
         return null;
@@ -490,15 +502,7 @@ public class ImageUtil
      */
     public static BufferedImage toARGBImage(Image image)
     {
-        if (image != null)
-        {
-            // be sure image data are ready
-            waitImageReady(image);
-            return convert(image,
-                    new BufferedImage(image.getWidth(null), image.getHeight(null), BufferedImage.TYPE_INT_ARGB));
-        }
-
-        return null;
+        return convert(image, new BufferedImage(image.getWidth(null), image.getHeight(null), BufferedImage.TYPE_INT_ARGB));
     }
 
     /**
@@ -598,6 +602,209 @@ public class ImageUtil
     }
 
     /**
+     * @return ARGB pixels from image (0xAARRGGBB)
+     */
+    public static int[] getARGBPixels(String filename) throws IOException
+    {
+        final BufferedImage image = ImageIO.read(new File(filename));
+        if (image == null)
+            throw new IOException("Can't open image '" + filename + "'.");
+
+        final BufferedImage argbImage;
+
+        if (image.getType() != BufferedImage.TYPE_INT_ARGB)
+            argbImage = toARGBImage(image);
+        else
+            argbImage = image;
+
+        final DataBuffer db = argbImage.getRaster().getDataBuffer();
+        if (!(db instanceof DataBufferInt))
+            throw new IllegalArgumentException("Image '" + filename + "' error: unexpected data buffer format !");
+
+        return ((DataBufferInt) db).getData();
+    }
+
+    public static byte[] getImageAs8bpp(String imgFile, boolean checkTileAligned, boolean removeRGBPalette) throws Exception
+    {
+        // retrieve basic infos about the image
+        final BasicImageInfo imgInfo = getBasicInfo(imgFile);
+
+        // check size is correct
+        if (checkTileAligned)
+        {
+            if ((imgInfo.w & 7) != 0)
+                throw new IllegalArgumentException("'" + imgFile + "' width is '" + imgInfo.w + ", should be a multiple of 8.");
+            if ((imgInfo.h & 7) != 0)
+                throw new IllegalArgumentException("'" + imgFile + "' height is '" + imgInfo.h + ", should be a multiple of 8.");
+        }
+
+        // true color / RGB image ?
+        if (imgInfo.bpp > 8)
+            return convertRGBTo8bpp(imgFile, removeRGBPalette);
+
+        // get image data
+        final byte[] data = getIndexedPixels(imgFile);
+        // convert to 8 bpp
+        return convertTo8bpp(data, imgInfo.bpp);
+    }
+
+    static Integer getTilePlainColor(int[] argbImage, int imgWidth, int xt, int yt)
+    {
+        int off = ((yt * 8) * imgWidth) + (xt * 8);
+        int col = argbImage[off];
+
+        for (int y = 0; y < 8; y++)
+        {
+            for (int x = 0; x < 8; x++)
+            {
+                if (argbImage[off++] != col)
+                    return null;
+            }
+
+            off += imgWidth - 8;
+        }
+
+        return Integer.valueOf(col);
+    }
+
+    /**
+     * Returns RGBA888 palette from top-left 4 rows of 8x8 tiles in the specified ARGB image.<br>
+     * Colors are formated as follow: 0xAABBGGRR != ARGB pixel which are 0xAARRGGBB
+     */
+    public static int[] getRGBA8888PaletteFromTiles(int[] argbPixels, int w, int h) throws Exception
+    {
+        if (w < 128)
+            throw new Exception("Error: RGB image width should be >= 128 to store palette data !");
+        if (h < 32)
+            throw new Exception("Error: RGB image height should be >= 32 to store palette data !");
+
+        // 4 palettes of 16 colors
+        final int[] palette = new int[(4 * 16) + 1];
+
+        int off = 0;
+        for (int p = 0; p < 4; p++)
+        {
+            for (int c = 0; c < 16; c++)
+            {
+                final Integer plainCol = getTilePlainColor(argbPixels, w, c, p);
+
+                // not a plain tile ? -> stop here
+                if (plainCol == null)
+                    throw new Exception("Error: expected a plain tile for palette data at position [" + p + "," + c
+                            + "] (see rescomp.txt for more info about RGB image) !");
+
+                // store color (we want it in RGBA / ABGR format)
+                palette[off++] = ARGBtoABGR(plainCol.intValue());
+            }
+        }
+
+        // palette[64] is reserved for backdrop color (default = color 0)
+        palette[64] = palette[0];
+
+        if (w >= 136)
+        {
+            // get optional alternate backdrop color
+            final Integer backdropCol = getTilePlainColor(argbPixels, w, 16, 0);
+            // plain tile ? -> save as backdrop color
+            if (backdropCol != null)
+                palette[64] = ARGBtoABGR(backdropCol.intValue());
+        }
+
+        // return palette
+        return palette;
+    }
+
+    /**
+     * Returns RGBA888 palette from top-left 4 rows of 8x8 tiles in the specified ARGB image.<br>
+     * Colors are formated as follow: 0xAABBGGRR != ARGB pixel which are 0xAARRGGBB
+     */
+    public static int[] getRGBA8888PaletteFromTiles(String filename) throws Exception
+    {
+        final BasicImageInfo imageInfo = getBasicInfo(filename);
+        // get ARGB pixels
+        final int[] argbPixels = getARGBPixels(filename);
+
+        final int[] result;
+        try
+        {
+            // get all palette from RGB image, palette[64] contains possible alternate backdrop color
+            result = getRGBA8888PaletteFromTiles(argbPixels, imageInfo.w, imageInfo.h);
+        }
+        catch (Exception e)
+        {
+            throw new Exception(e.getMessage() + "\nFile: '" + filename + "'");
+        }
+
+        // replace by alternate backdrop color
+        result[0] = result[64];
+        // remove last entry
+        return Arrays.copyOf(result, 64);
+    }
+
+    /**
+     * Returns RGBA4444 palette (A in high bits and R in low bits)
+     */
+    public static short[] getRGBA4444PaletteFromTiles(String filename, int mask) throws Exception
+    {
+        return convertRGBA8888toRGBA4444(getRGBA8888PaletteFromTiles(filename), mask);
+    }
+
+    /**
+     * Get palette data from Paint Shop Pro .pal file
+     */
+    public static int[] getRGBA88884PaletteFromPALFile(String file) throws IOException
+    {
+        String line;
+
+        try (BufferedReader br = new BufferedReader(new FileReader(file)))
+        {
+            // signature
+            line = br.readLine();
+            if (!StringUtil.equals(line, "JASC-PAL"))
+                throw new IllegalArgumentException("'" + file + "' is not a valid Paint Shop Pro .pal file !");
+
+            // version
+            line = br.readLine();
+            // palette size
+            final int size = Integer.parseInt(br.readLine());
+
+            final int[] result = new int[size];
+
+            for (int i = 0; i < size; i++)
+            {
+                final String rgba[] = br.readLine().replaceAll("#[0-9a-fA-F]+", "").split("\\s+");
+
+                final int r, g, b, a;
+
+                if (rgba.length < 3)
+                {
+                    r = g = b = Integer.parseInt(rgba[0]);
+                    a = 0xFF;
+                }
+                else
+                {
+                    r = Integer.parseInt(rgba[0]);
+                    g = Integer.parseInt(rgba[1]);
+                    b = Integer.parseInt(rgba[2]);
+                    a = (rgba.length > 3) ? StringUtil.parseInt(rgba[3], 0xFF) : 0xFF;
+                }
+
+                result[i] = (a << 24) | (b << 16) | (g << 8) | (r << 0);
+            }
+
+            return result;
+        }
+    }
+
+    /**
+     * Get palette data from Paint Shop Pro .pal file
+     */
+    public static short[] getRGBA4444PaletteFromPALFile(String file, int mask) throws IOException
+    {
+        return convertRGBA8888toRGBA4444(getRGBA88884PaletteFromPALFile(file), mask);
+    }
+
+    /**
      * Return pixels (indexed color) array from the specified image file
      * 
      * @param filename
@@ -615,8 +822,7 @@ public class ImageUtil
         {
             final ColorModel cm = image.getColorModel();
             if (!(cm instanceof IndexColorModel))
-                throw new IllegalArgumentException("Image '" + filename
-                        + "' is RGB, only indexed images (8bpp, 4bpp, 2bpp and 1bpp) are supported !");
+                throw new IllegalArgumentException("Image '" + filename + "' is RGB, only indexed images (8bpp, 4bpp, 2bpp and 1bpp) are supported !");
         }
 
         final DataBuffer db = image.getRaster().getDataBuffer();
@@ -681,8 +887,7 @@ public class ImageUtil
         return result;
     }
 
-    public static boolean hasOpaquePixelOnEdge(byte[] image8bpp, Dimension imageDim, Rectangle region, boolean left,
-            boolean top, boolean right, boolean bottom)
+    public static boolean hasOpaquePixelOnEdge(byte[] image8bpp, Dimension imageDim, Rectangle region, boolean left, boolean top, boolean right, boolean bottom)
     {
         final Rectangle adjRegion = region.intersection(new Rectangle(imageDim));
         final int w = imageDim.width;
@@ -731,6 +936,28 @@ public class ImageUtil
 
         return false;
     }
+    
+    public static Rectangle getOpaqueRect(byte[] image8bpp, Dimension imageDim, Rectangle region)
+    {
+        Rectangle adjRegion = region.intersection(new Rectangle(imageDim));
+        Rectangle result = new Rectangle(0, 0, -1, -1);
+        Rectangle pt = new Rectangle(0, 0, 1, 1);
+        
+        for(int j = adjRegion.y; j < (adjRegion.y + adjRegion.height); j++)
+        {
+            int offset = j * imageDim.width;
+            for(int i = adjRegion.x; i < (adjRegion.x + adjRegion.width); i++)
+            {
+                if (image8bpp[offset + i] != 0)
+                {
+                    pt.setLocation(i, j);
+                    result.add(pt);
+                }
+            }
+        }
+        
+        return result;
+    }
 
     /**
      * Returns used palette index
@@ -755,8 +982,8 @@ public class ImageUtil
                     if (pal == -1)
                         pal = curPal;
                     else if (pal != curPal)
-                        throw new IllegalArgumentException("Error: pixel at [" + x + "," + y
-                                + "] reference a different palette (" + curPal + " != " + pal + ").");
+                        throw new IllegalArgumentException(
+                                "Error: pixel at [" + x + "," + y + "] reference a different palette (" + curPal + " != " + pal + ").");
                 }
             }
         }
@@ -765,9 +992,9 @@ public class ImageUtil
     }
 
     /**
-     * Returns RGBA palette (A in high bits and R in low bits)
+     * Returns RGBA palette (color formated as follow: 0xAABBGGRR != ARGB pixel)
      */
-    public static int[] getRGBA8888Palette(String filename) throws IOException, IllegalArgumentException
+    public static int[] getRGBA8888PaletteFromIndColImage(String filename) throws IOException, IllegalArgumentException
     {
         final BufferedImage image = ImageIO.read(new File(filename));
         if (image == null)
@@ -786,29 +1013,69 @@ public class ImageUtil
 
         final ColorModel cm = image.getColorModel();
         if (!(cm instanceof IndexColorModel))
-            throw new IllegalArgumentException(
-                    "Image '" + filename + "' is RGB, only indexed images (8bpp, 4bpp, 2bpp and 1bpp) are supported !");
+            throw new IllegalArgumentException("Image '" + filename + "' is RGB, only indexed images (8bpp, 4bpp, 2bpp and 1bpp) are supported !");
 
         final IndexColorModel icm = (IndexColorModel) cm;
         final int[] result = new int[icm.getMapSize()];
 
         for (int i = 0; i < result.length; i++)
-            result[i] = (icm.getAlpha(i) << 24) | (icm.getBlue(i) << 16) | (icm.getGreen(i) << 8)
-                    | (icm.getRed(i) << 0);
+            result[i] = (icm.getAlpha(i) << 24) | (icm.getBlue(i) << 16) | (icm.getGreen(i) << 8) | (icm.getRed(i) << 0);
 
         return result;
     }
 
     /**
-     * Returns RGBA4444 palette (A in high bits and R in low bits)
+     * Convert a ARGB (0xAARRGGBB) color to a ABGR (0xAABBGGRR) color
      */
-    public static short[] getRGBA4444Palette(String filename, int mask) throws IOException
+    public static int ARGBtoABGR(int color)
     {
-        return convertRGBA8888toRGBA4444(getRGBA8888Palette(filename), mask);
+        // exchange R and B components
+        return (color & 0xFF00FF00) | ((color & 0x00FF0000) >> 16) | ((color & 0x000000FF) << 16);
+    }
+
+    public static int ABGRtoARGB(int color)
+    {
+        // this is the same operation (exchange R and B components)
+        return ARGBtoABGR(color);
+    }
+    
+    /**
+     * Convert a ARGB (0xAARRGGBB) color to a ABGR (0xAABBGGRR) color
+     */
+    public static int[] ARGBtoABGR(int[] palette)
+    {
+        final int[] result = new int[palette.length];
+        
+        for(int i = 0; i < palette.length; i++)
+            result[i] = ARGBtoABGR(palette[i]);
+        
+        return result;
+    }
+
+    public static int[] ABGRtoARGB(int[] palette)
+    {
+        final int[] result = new int[palette.length];
+        
+        for(int i = 0; i < palette.length; i++)
+            result[i] = ABGRtoARGB(palette[i]);
+        
+        return result;
+    }
+
+
+    /**
+     * Returns RGBA4444 palette (0xABGR)
+     */
+    public static short[] getRGBA4444PaletteFromIndColImage(String filename, int mask) throws IOException
+    {
+        return convertRGBA8888toRGBA4444(getRGBA8888PaletteFromIndColImage(filename), mask);
     }
 
     public static short[] convertRGBA8888toRGBA4444(int[] pixels, int mask)
     {
+        if (pixels == null)
+            return null;
+
         final short[] result = new short[pixels.length];
 
         for (int i = 0; i < pixels.length; i++)
@@ -924,6 +1191,84 @@ public class ImageUtil
         return result;
     }
 
+    static byte[] convert2bppTo1bpp(byte[] data)
+    {
+        final byte[] result = new byte[data.length / 2];
+
+        for (int i = 0; i < data.length / 2; i++)
+        {
+            final byte b0 = (byte) ((data[(i * 2) + 0] >> 0) & 1);
+            final byte b1 = (byte) ((data[(i * 2) + 0] >> 2) & 1);
+            final byte b2 = (byte) ((data[(i * 2) + 0] >> 4) & 1);
+            final byte b3 = (byte) ((data[(i * 2) + 0] >> 6) & 1);
+            final byte b4 = (byte) ((data[(i * 2) + 1] >> 0) & 1);
+            final byte b5 = (byte) ((data[(i * 2) + 1] >> 2) & 1);
+            final byte b6 = (byte) ((data[(i * 2) + 1] >> 4) & 1);
+            final byte b7 = (byte) ((data[(i * 2) + 1] >> 6) & 1);
+
+            result[i] = (byte) ((b7 << 7) | (b6 << 6) | (b5 << 5) | (b4 << 4) | (b3 << 3) | (b2 << 2) | (b1 << 1) | (b0 << 0));
+        }
+
+        return result;
+    }
+
+    static byte[] convert4bppTo1bpp(byte[] data)
+    {
+        final byte[] result = new byte[data.length / 4];
+
+        for (int i = 0; i < data.length / 4; i++)
+        {
+            final byte b0 = (byte) ((data[(i * 4) + 0] >> 0) & 1);
+            final byte b1 = (byte) ((data[(i * 4) + 0] >> 4) & 1);
+            final byte b2 = (byte) ((data[(i * 4) + 1] >> 0) & 1);
+            final byte b3 = (byte) ((data[(i * 4) + 1] >> 4) & 1);
+            final byte b4 = (byte) ((data[(i * 4) + 2] >> 0) & 1);
+            final byte b5 = (byte) ((data[(i * 4) + 2] >> 4) & 1);
+            final byte b6 = (byte) ((data[(i * 4) + 3] >> 0) & 1);
+            final byte b7 = (byte) ((data[(i * 4) + 3] >> 4) & 1);
+
+            result[i] = (byte) ((b7 << 7) | (b6 << 6) | (b5 << 5) | (b4 << 4) | (b3 << 3) | (b2 << 2) | (b1 << 1) | (b0 << 0));
+        }
+
+        return result;
+    }
+
+    static byte[] convert8bppTo1bpp(byte[] data)
+    {
+        final byte[] result = new byte[data.length / 8];
+
+        for (int i = 0; i < data.length / 8; i++)
+        {
+            result[i] = (byte) ((data[(i * 8) + 0] & 1) << 7);
+            result[i] |= (byte) ((data[(i * 8) + 1] & 1) << 6);
+            result[i] |= (byte) ((data[(i * 8) + 2] & 1) << 5);
+            result[i] |= (byte) ((data[(i * 8) + 3] & 1) << 4);
+            result[i] |= (byte) ((data[(i * 8) + 4] & 1) << 3);
+            result[i] |= (byte) ((data[(i * 8) + 5] & 1) << 2);
+            result[i] |= (byte) ((data[(i * 8) + 6] & 1) << 1);
+            result[i] |= (byte) ((data[(i * 8) + 7] & 1) << 0);
+        }
+
+        return result;
+    }
+
+    public static byte[] convertTo1bpp(byte[] data, int inputBpp)
+    {
+        switch (inputBpp)
+        {
+            default:
+                throw new IllegalArgumentException("Not supported image data format (" + inputBpp + " bpp)");
+            case 1:
+                return data;
+            case 2:
+                return convert2bppTo1bpp(data);
+            case 4:
+                return convert4bppTo1bpp(data);
+            case 8:
+                return convert8bppTo1bpp(data);
+        }
+    }
+
     public static byte[] convertTo4bpp(byte[] data, int inputBpp)
     {
         switch (inputBpp)
@@ -956,5 +1301,220 @@ public class ImageUtil
             case 8:
                 return data;
         }
+    }
+
+    /**
+     * Convert an (A)RGB image to 8bpp image using the palette information
+     * found in the image (4 lines of 8x8 tiles giving the 16 colors for each palette)
+     * 
+     * @param cropPalette
+     *        remove palette tiles from result image
+     * @return null if not palette data found
+     */
+    public static byte[] convertRGBTo8bpp(String filename, boolean cropPalette) throws Exception
+    {
+        final BasicImageInfo imageInfo = getBasicInfo(filename);
+        final int w = imageInfo.w;
+        final int h = imageInfo.h;
+
+        if ((imageInfo.w & 7) != 0)
+            throw new IllegalArgumentException("'" + filename + "' width is '" + imageInfo.w + ", should be a multiple of 8 for RGB image.");
+        if ((imageInfo.h & 7) != 0)
+            throw new IllegalArgumentException("'" + filename + "' height is '" + imageInfo.h + ", should be a multiple of 8 for RGB image.");
+
+        // get ARGB pixels
+        final int[] argbPixels = getARGBPixels(filename);
+
+        final int[] palette;
+        try
+        {
+            // retrieve the palette (ABGR8888 format)
+            palette = getRGBA8888PaletteFromTiles(argbPixels, w, h);
+        }
+        catch (Exception e)
+        {
+            throw new Exception(e.getMessage() + "\nFile: '" + filename + "'");
+        }
+
+        if (palette == null)
+            return null;
+
+        // build the color map for fast find
+        final Map<Integer, List<Integer>> colorMap = new HashMap<Integer, List<Integer>>();
+
+        // need ARGB color in hashmap for fast match
+        for (int c = 0; c < 64; c++)
+        {
+            final Integer color = Integer.valueOf(ABGRtoARGB(palette[c]));
+
+            List<Integer> indexes = colorMap.get(color);
+            if (indexes == null)
+            {
+                indexes = new ArrayList<>();
+                colorMap.put(color, indexes);
+            }
+
+            // add index
+            indexes.add(Integer.valueOf(c));
+        }
+
+        final int wt = w / 8;
+        final int ht = h / 8;
+        byte[] result = new byte[w * h];
+
+        for (int yt = 0; yt < 4; yt++)
+        {
+            for (int xt = 0; xt < wt; xt++)
+            {
+                int off = ((yt * 8) * w) + (xt * 8);
+
+                for (int y = 0; y < 8; y++)
+                {
+                    for (int x = 0; x < 8; x++)
+                    {
+                        // we don't care about this pixels as it's reserved to palette area
+                        result[off++] = (byte) ((xt < 16) ? (yt * 16) + xt : 0);
+                    }
+
+                    // next tile row
+                    off += w - 8;
+                }
+            }
+        }
+
+        for (int yt = 0; yt < ht; yt++)
+        {
+            for (int xt = 0; xt < wt; xt++)
+            {
+                int off = ((yt * 8) * w) + (xt * 8);
+
+                // process palette tiles quickly
+                if ((yt < 4) && (xt < 16))
+                {
+                    for (int y = 0; y < 8; y++)
+                    {
+                        for (int x = 0; x < 8; x++)
+                            result[off++] = (byte) ((yt * 16) + xt);
+
+                        // next tile row
+                        off += w - 8;
+                    }
+                }
+                // special alternate backdrop color
+                else if ((yt == 0) && (xt == 16))
+                {
+                    for (int y = 0; y < 8; y++)
+                    {
+                        // fix to 0 here
+                        for (int x = 0; x < 8; x++)
+                            result[off++] = 0;
+
+                        // next tile row
+                        off += w - 8;
+                    }
+                }
+                else
+                {
+                    // get possible palettes for first pixel
+                    final Set<Integer> pals = new HashSet<>();
+                    List<Integer> indexes = colorMap.get(Integer.valueOf(argbPixels[off]));
+
+                    // color was not present in palette
+                    if ((indexes == null) || indexes.isEmpty())
+                        throw new Exception("'" + filename + "': pixel at position [" + (xt * 8) + "," + (yt * 8) + "] uses a color not present in palette.");
+
+                    for (Integer index : indexes)
+                        pals.add(Integer.valueOf(index.intValue() & 0xF0));
+
+                    for (int y = 0; y < 8; y++)
+                    {
+                        // only 1 palette remaining --> can stop
+                        if (pals.size() <= 1)
+                            break;
+
+                        for (int x = 0; x < 8; x++)
+                        {
+                            // only 1 palette remaining --> can stop
+                            if (pals.size() <= 1)
+                                break;
+
+                            // get possible palette for current pixel
+                            final Set<Integer> curPals = new HashSet<>();
+                            indexes = colorMap.get(Integer.valueOf(argbPixels[off]));
+
+                            // color was not present in palette
+                            if ((indexes == null) || indexes.isEmpty())
+                                throw new Exception("'" + filename + "': pixel at position [" + ((xt * 8) + x) + "," + ((yt * 8) + y)
+                                        + "] uses a color not present in palette.");
+
+                            for (Integer index : indexes)
+                                curPals.add(Integer.valueOf(index.intValue() & 0xF0));
+
+                            // retain common palette only
+                            pals.retainAll(curPals);
+
+                            if (pals.isEmpty())
+                                throw new Exception("'" + filename + "': pixels at position [" + ((xt * 8) + x) + "," + ((yt * 8) + y)
+                                        + "] use color from a different palette.");
+
+                            // next pixel
+                            off++;
+                        }
+
+                        // next tile row
+                        off += w - 8;
+                    }
+
+                    // get final palette
+                    final int pal = pals.iterator().next().intValue();
+                    // reset offset
+                    off = ((yt * 8) * w) + (xt * 8);
+
+                    for (int y = 0; y < 8; y++)
+                    {
+                        for (int x = 0; x < 8; x++)
+                        {
+                            boolean done = false;
+                            indexes = colorMap.get(Integer.valueOf(argbPixels[off]));
+
+                            // color was not present in palette
+                            if ((indexes == null) || indexes.isEmpty())
+                                throw new Exception("'" + filename + "': pixel at position [" + ((xt * 8) + x) + "," + ((yt * 8) + y)
+                                        + "] uses a color not present in palette.");
+
+                            for (Integer index : indexes)
+                            {
+                                // palette of current pixel
+                                final int indexValue = index.intValue();
+
+                                // palette match ? --> use it
+                                if ((indexValue & 0xF0) == pal)
+                                {
+                                    result[off] = (byte) indexValue;
+                                    done = true;
+                                    break;
+                                }
+                            }
+
+                            if (!done)
+                                throw new Exception("'" + filename + "': pixel at position [" + ((xt * 8) + x) + "," + ((yt * 8) + y)
+                                        + "] use color from a different palette.");
+
+                            // next pixel
+                            off++;
+                        }
+
+                        // next tile row
+                        off += w - 8;
+                    }
+                }
+            }
+        }
+
+        // remove palette data
+        if (cropPalette)
+            result = getSubImage(result, new Dimension(w, h), new Rectangle(0, 4 * 8, w, h - (4 * 8)));
+
+        return result;
     }
 }

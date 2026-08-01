@@ -1,5 +1,6 @@
 #include "config.h"
 #include "types.h"
+#include "sys.h"
 
 #include "ym2612.h"
 
@@ -19,7 +20,7 @@ static void writeChannelReg(u16 port, u8 ch, u8 reg, u8 value)
     YM2612_write((port * 2) + 1, value);
 }
 
-void YM2612_reset()
+NO_INLINE void YM2612_reset()
 {
     u16 p, ch, sl;
     u16 busTaken;
@@ -38,7 +39,7 @@ void YM2612_reset()
     YM2612_write(0, 0x2B);
     YM2612_write(1, 0x00);
 
-    for(p = 0; p < 1; p++)
+    for(p = 0; p < 2; p++)
     {
         for(ch = 0; ch < 3; ch++)
         {
@@ -62,7 +63,7 @@ void YM2612_reset()
         }
     }
 
-    for(p = 0; p < 1; p++)
+    for(p = 0; p < 2; p++)
     {
         for(ch = 0; ch < 3; ch++)
         {
@@ -103,6 +104,17 @@ u8 YM2612_read(const u16 port)
     return pb[port & 3];
 }
 
+u8 YM2612_readStatus()
+{
+    vu8 *pb;
+
+    // status is on port #0 for YM3438 (all ports for YM2612)
+    pb = (u8*) YM2612_BASEPORT;
+
+    return *pb;
+}
+
+
 void YM2612_write(const u16 port, const u8 data)
 {
     vs8 *pb;
@@ -113,11 +125,13 @@ void YM2612_write(const u16 port, const u8 data)
     while (*pb < 0);
     // write data
     pb[port & 3] = data;
-}
 
-void YM2612_writeSafe(const u16 port, const u8 data)
-{
-    YM2612_write(port, data);
+    // busy flag is not updated immediatly, force wait (needed on MD2)
+    asm volatile ("nop");
+    asm volatile ("nop");
+    asm volatile ("nop");
+    asm volatile ("nop");
+    asm volatile ("nop");
 }
 
 void YM2612_writeReg(const u16 part, const u8 reg, const u8 data)
@@ -133,35 +147,29 @@ void YM2612_writeReg(const u16 part, const u8 reg, const u8 data)
     // set reg
     pb[port + 0] = reg;
 
+    // need a minimum of 12 cycles between address and data write
+    asm volatile ("nop");
+
+    // set data
+    pb[port + 1] = data;
+
     // busy flag is not updated immediatly, force wait (needed on MD2)
     asm volatile ("nop");
     asm volatile ("nop");
     asm volatile ("nop");
     asm volatile ("nop");
     asm volatile ("nop");
-
-    // wait while YM2612 busy
-    while (*pb < 0);
-    // set data
-    pb[port + 1] = data;
-}
-
-void YM2612_writeRegSafe(const u16 part, const u8 reg, const u8 data)
-{
-    YM2612_writeReg(part, reg, data);
 }
 
 
 void YM2612_enableDAC()
 {
     // enable DAC
-    YM2612_write(0, 0x2B);
-    YM2612_write(1, 0x80);
+    YM2612_writeReg(0, 0x2B, 0x80);
 }
 
 void YM2612_disableDAC()
 {
     // disable DAC
-    YM2612_write(0, 0x2B);
-    YM2612_write(1, 0x00);
+    YM2612_writeReg(0, 0x2B, 0x00);
 }

@@ -2,7 +2,8 @@
  * \brief MeGaWiFi API implementation.
  *
  * \author Jesus Alonso (doragasu)
- * \date 2015
+ * \author Juan Antonio (PaCHoN)
+ * \date 2025
  *
  * \note Module is not reentrant.
  *
@@ -10,37 +11,31 @@
  *       channels, and is not currently doing it
  ****************************************************************************/
 
-#include "genesis.h"
+#include "config.h"
+#include "types.h"
 
+#include "string.h"
+#include "memory.h"
+#include "maths.h"
+#include "task.h"
 
-#if (MODULE_MEGAWIFI != 0)
+#if (MODULE_MEGAWIFI == 1)
 
 #include "ext/mw/megawifi.h"
 
 /// Remove compiler warnings when not using a function parameter
 #define UNUSED_PARAM(x)		(void)x
 
-#if !defined(MAX)
-/// Returns the maximum of two numbers
-#define MAX(a, b)	((a)>(b)?(a):(b))
-#endif
-#if !defined(MIN)
-/// Returns the minimum of two numbers
-#define MIN(a, b)	((a)<(b)?(a):(b))
-#endif
-
 // Should consider if console is PAL or NTSC
-#define MS_TO_FRAMES(ms)	(((ms)*60/500 + 1)/2)
 
-#define MW_COMMAND_TOUT		MS_TO_FRAMES(MW_COMMAND_TOUT_MS)
-#define MW_CONNECT_TOUT		MS_TO_FRAMES(MW_CONNECT_TOUT_MS)
-#define MW_SCAN_TOUT		MS_TO_FRAMES(MW_SCAN_TOUT_MS)
-#define MW_ASSOC_TOUT		MS_TO_FRAMES(MW_ASSOC_TOUT_MS)
-#define MW_ASSOC_WAIT_SLEEP	MS_TO_FRAMES(MW_ASSOC_WAIT_SLEEP_MS)
-#define MW_STAT_POLL_TOUT	MS_TO_FRAMES(MW_STAT_POLL_MS)
-#define MW_HTTP_OPEN_TOUT	MS_TO_FRAMES(MW_HTTP_OPEN_TOUT_MS)
-#define MW_UPGRADE_TOUT		MS_TO_FRAMES(MW_UPGRADE_TOUT_MS)
-
+#define MW_COMMAND_TOUT		MW_MS_TO_FRAMES(MW_COMMAND_TOUT_MS)
+#define MW_CONNECT_TOUT		MW_MS_TO_FRAMES(MW_CONNECT_TOUT_MS)
+#define MW_SCAN_TOUT		MW_MS_TO_FRAMES(MW_SCAN_TOUT_MS)
+#define MW_ASSOC_TOUT		MW_MS_TO_FRAMES(MW_ASSOC_TOUT_MS)
+#define MW_ASSOC_WAIT_SLEEP	MW_MS_TO_FRAMES(MW_ASSOC_WAIT_SLEEP_MS)
+#define MW_STAT_POLL_TOUT	MW_MS_TO_FRAMES(MW_STAT_POLL_MS)
+#define MW_HTTP_OPEN_TOUT	MW_MS_TO_FRAMES(MW_HTTP_OPEN_TOUT_MS)
+#define MW_UPGRADE_TOUT		MW_MS_TO_FRAMES(MW_UPGRADE_TOUT_MS)
 /*
  * The module assumes that once started, sending always succeeds, but uses
  * timers (when defined) for data reception.
@@ -116,7 +111,7 @@ static uint16_t concat_kv_pairs(const char **key, const char **value,
 	return pos;
 }
 
-int16_t mw_init(char *cmd_buf, uint16_t buf_len)
+int16_t mw_init(uint16_t *cmd_buf, uint16_t buf_len)
 {
 	if (!cmd_buf || buf_len < MW_CMD_MIN_BUFLEN) {
 		return MW_ERR_BUFFER_TOO_SHORT;
@@ -127,17 +122,6 @@ int16_t mw_init(char *cmd_buf, uint16_t buf_len)
 	d.buf_len = buf_len;
 
 	lsd_init();
-
-	// Keep WiFi module in reset
-	mw_module_reset();
-	// Power down and Program not active (required for the module to boot)
-	uart_clr_bits(MCR, MW__PRG | MW__PD);
-
-	// Try accessing UART scratch pad register to see if it is installed
-	UART_SPR = 0x55;
-	if (UART_SPR != 0x55) return MW_ERR;
-	UART_SPR = 0xAA;
-	if (UART_SPR != 0xAA) return MW_ERR;
 
 	// Enable control channel
 	lsd_ch_enable(MW_CTRL_CH);
@@ -255,7 +239,7 @@ enum mw_err mw_send_sync(uint8_t ch, const char *data, uint16_t len,
 	uint16_t sent = 0;
 
 	while (sent < len) {
-		to_send = MIN(len - sent, d.buf_len);
+		to_send = min(len - sent, d.buf_len);
 		lsd_send(ch, data + sent, to_send, NULL, cmd_send_cb);
 		tout = TSK_superPend(tout_frames);
 		if (tout) {
@@ -273,14 +257,8 @@ enum mw_err mw_detect(uint8_t *major, uint8_t *minor, char **variant)
 	enum mw_err err;
 	uint8_t version[3];
 
-	// Wait a bit and take module out of resest
-	TSK_superPend(MS_TO_FRAMES(30));
-	mw_module_start();
-	TSK_superPend(MS_TO_FRAMES(1000));
-
 	do {
 		retries--;
-		uart_reset_fifos();
 		err = mw_version_get(version, variant);
 	} while (err != MW_ERR_NONE && retries);
 
@@ -1470,6 +1448,54 @@ enum mw_err mw_fw_upgrade(const char *name)
 	}
 
 	return MW_ERR_NONE;
+}
+
+enum mw_err mw_fw_list_upgrades(uint8_t page, uint8_t size, uint8_t offset, char **listUpgrades, uint8_t *len, uint8_t *total)
+{
+	enum mw_err err;
+
+	if (!d.mw_ready) {
+		return MW_ERR_NOT_READY;
+	}
+
+	d.cmd->cmd = MW_CMD_UPGRADE_LIST;
+	d.cmd->data[0] = page;
+	d.cmd->data[1] = size;
+	d.cmd->data[2] = offset;
+	d.cmd->data_len = 3;
+	err = mw_command(MW_UPGRADE_TOUT);
+	if (err) {
+		return MW_ERR;
+	}
+
+	*listUpgrades = (char*)d.cmd->data+4;
+	*len = d.cmd->ug_list_response.len;
+	*total = d.cmd->ug_list_response.total;
+	return MW_ERR_NONE;
+}
+
+struct mw_ping_response *mw_ping(const char* domain, u8 retries)
+{
+	enum mw_err err;
+
+	if (!d.mw_ready) {
+		return NULL;
+	}
+
+	if (!domain) {
+		return NULL;
+	}
+
+	d.cmd->cmd = MW_CMD_PING;
+	d.cmd->data_len = sizeof(struct mw_ping_request);
+	strcpy(d.cmd->ping.domain, domain);
+	d.cmd->ping.retries = retries;
+	err = mw_command(MW_CONNECT_TOUT * retries);
+	if (err) {
+		return NULL;
+	}
+
+	return &d.cmd->ping_response;
 }
 
 #endif // MODULE_MEGAWIFI

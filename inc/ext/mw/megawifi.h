@@ -17,8 +17,9 @@
  * prepended to the payload.
  *
  * \author Jesus Alonso (doragasu)
- * \date 2015
- *
+ * \author Juan Antonio (PaCHoN)
+ * \date 2025
+ * 
  * \note This module requires setting MODULE_MEGAWIFI to 1 in config.h and
  * rebuilding the library (if you had to change them).
  ****************************************************************************/
@@ -26,12 +27,9 @@
 #ifndef _MEGAWIFI_H_
 #define _MEGAWIFI_H_
 
-#include "16c550.h"
-#include "mw-msg.h"
-#include "lsd.h"
-
-#if (MODULE_MEGAWIFI != 0)
-
+#include "ext/mw/mw-msg.h"
+#include "ext/mw/lsd.h"
+#include "ext/mw/comm.h"
 
 /// API version implemented, major number
 #define MW_API_VERSION_MAJOR	1
@@ -40,7 +38,7 @@
 #define MW_API_VERSION_MINOR	5
 
 /// Timeout for standard commands in milliseconds
-#define MW_COMMAND_TOUT_MS	1000
+#define MW_COMMAND_TOUT_MS	2000
 /// Timeout for TCP connections
 #define MW_CONNECT_TOUT_MS	10000
 /// Timeout for HTTP open command in milliseconds
@@ -52,7 +50,9 @@
 /// Time to sleep before waiting for assoc in milliseconds
 #define MW_ASSOC_WAIT_SLEEP_MS	5000
 /// Timeout for upgrade command in milliseconds
-#define MW_UPGRADE_TOUT_MS	180000
+#define MW_UPGRADE_TOUT_MS	600000
+/// Timeout for ping command in milliseconds
+#define MW_PING_TOUT_MS	30000
 /// Milliseconds between status polls while in wm_ap_assoc_wait()
 #define MW_STAT_POLL_MS		250
 
@@ -81,15 +81,6 @@ enum mw_http_method {
     MW_HTTP_METHOD_OPTIONS,    ///< HTTP OPTIONS
     MW_HTTP_METHOD_MAX,
 };
-
-/** \addtogroup mw_ctrl_pins mw_ctrl_pins
- *  \brief Pins used to control WiFi module.
- *  \{ */
-#define MW__RESET	UART_MCR__OUT1	///< Reset out.
-#define MW__PRG		UART_MCR__OUT2	///< Program out.
-#define MW__PD		UART_MCR__DTR	///< Power Down out.
-#define MW__DAT		UART_MSR__DSR	///< Data request in.
-/** \} */
 
 /// Maximum SSID length (including '\0').
 #define MW_SSID_MAXLEN		32
@@ -140,7 +131,7 @@ enum mw_if_type {
  *
  * \return MW_ERR_NONE on success, other code on failure.
  ****************************************************************************/
-int16_t mw_init(char *cmd_buf, uint16_t buf_len);
+int16_t mw_init(uint16_t *cmd_buf, uint16_t buf_len);
 
 /************************************************************************//**
  * \brief Processes sends/receives pending data.
@@ -660,16 +651,6 @@ enum mw_err mw_flash_write(uint32_t addr, uint8_t *data, uint16_t data_len);
 uint8_t *mw_flash_read(uint32_t addr, uint16_t data_len);
 
 /************************************************************************//**
- * \brief Puts the WiFi module in reset state.
- ****************************************************************************/
-#define mw_module_reset()	do{uart_set_bits(MCR, MW__RESET);}while(0)
-
-/************************************************************************//**
- * \brief Releases the module from reset state.
- ****************************************************************************/
-#define mw_module_start()	do{uart_clr_bits(MCR, MW__RESET);}while(0)
-
-/************************************************************************//**
  * \brief Set gamertag information for one slot.
  *
  * \param[in] slot     Slot to use (from 0 to 2).
@@ -929,6 +910,20 @@ int16_t mw_ga_request(enum mw_http_method method, const char **path,
 		int16_t tout_frames);
 
 /************************************************************************//**
+ * \brief List available upgrades WiFi module firmware.
+ *
+ * \param[in] page           Page of list
+ * \param[in] page_size      Page size of list
+ * \param[in] offset         Offset number
+ * \param[out] listUpgrades  Pointer to list of char*
+ * \param[out] len 			 Result length
+ * \param[out] total         Total elements
+ *
+ * \return Status of the send procedure.
+ ****************************************************************************/
+enum mw_err mw_fw_list_upgrades(uint8_t page, uint8_t size, uint8_t offset, char **listUpgrades, uint8_t *len, uint8_t *total);
+
+/************************************************************************//**
  * \brief Over-The-Air upgrade WiFi module firmware.
  *
  * \param[in] name Name of the firmware blob to upgrade.
@@ -937,6 +932,18 @@ int16_t mw_ga_request(enum mw_http_method method, const char **path,
  * \return Status of the send procedure.
  ****************************************************************************/
 enum mw_err mw_fw_upgrade(const char *name);
+
+/************************************************************************//**
+ * \brief Run ICMP requesto to domain.
+ *
+ * \param[in] domain Domain to ICMP request.
+ *                 E.g. "www.example.com"
+ * \param[in] retries retries to ICMP request
+ *                 E.g. 5
+ *
+ * \return Status of the send procedure.
+ ****************************************************************************/
+struct mw_ping_response *mw_ping(const char* domain, u8 retries);
 
 /****** THE FOLLOWING COMMANDS ARE LOWER LEVEL AND USUALLY NOT NEEDED ******/
 
@@ -970,8 +977,6 @@ static inline enum lsd_status mw_cmd_recv(mw_cmd *rep, void *ctx,
 		lsd_recv_cb recv_cb) {
 	return lsd_recv(rep->packet, sizeof(mw_cmd), ctx, recv_cb);
 }
-
-#endif // MODULE_MEGAWIFI
 
 #endif /*_MEGAWIFI_H_*/
 

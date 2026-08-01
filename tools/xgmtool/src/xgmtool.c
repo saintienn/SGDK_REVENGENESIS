@@ -1,3 +1,4 @@
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,20 +9,21 @@
 #include "../inc/vgm.h"
 #include "../inc/xgm.h"
 #include "../inc/xgc.h"
+#include "../inc/compress.h"
 
 #define SYSTEM_AUTO     -1
 #define SYSTEM_NTSC     0
 #define SYSTEM_PAL      1
 
 
-const char* version = "1.73";
+const char* version = "1.76";
 int sys;
 bool silent;
 bool verbose;
 bool sampleRateFix;
 bool sampleIgnore;
 bool delayKeyOff;
-
+bool keepRF5C68Cmds;
 
 int main(int argc, char *argv[ ])
 {
@@ -30,13 +32,14 @@ int main(int argc, char *argv[ ])
 
     if (argc < 3)
     {
-        printf("XGMTool %s - Stephane Dallongeville - copyright 2020\n", version);
+        printf("XGMTool %s - Stephane Dallongeville - copyright 2024\n", version);
         printf("\n");
         printf("Usage: xgmtool inputFile outputFile <options>\n");
         printf("XGMTool can do the following operations:\n");
         printf(" - Optimize and reduce size of Sega Megadrive VGM file\n");
         printf("   Note that it won't work correctly on VGM file which require sub frame accurate timing.\n");
         printf(" - Convert a Sega Megadrive VGM file to XGM file\n");
+        printf(" - Convert a Sega Megadrive VGM file to ZGM (compressed) file\n");
         printf(" - Convert a XGM file to Sega Megadrive VGM file\n");
         printf(" - Compile a XGM file into a binary file (XGC) ready to played by the Z80 XGM driver\n");
         printf(" - Convert a XGC binary file to XGM file (experimental)\n");
@@ -47,6 +50,9 @@ int main(int argc, char *argv[ ])
         printf("\n");
         printf("Convert VGM to XGM:\n");
         printf("  xgmtool input.vgm output.xgm\n");
+        printf("\n");
+        printf("Convert VGM to ZGM:\n");
+        printf("  xgmtool input.vgm output.zgm\n");
         printf("\n");
         printf("Convert and compile VGM to binary/XGC:\n");
         printf("  xgmtool input.vgm output.bin\n");
@@ -74,6 +80,7 @@ int main(int argc, char *argv[ ])
         printf("-di\tdisable PCM sample auto ignore (it can help when PCM are not properly extracted).\n");
         printf("-dr\tdisable PCM sample rate auto fix (it can help when PCM are not properly extracted).\n");
         printf("-dd\tdisable delayed KEY OFF event when we have KEY ON/OFF in a single frame (it can fix incorrect instrument sound).\n");
+        printf("-r\tkeep RF5C68 and RF5C164 register write commands.\n");
 
         exit(1);
     }
@@ -84,6 +91,7 @@ int main(int argc, char *argv[ ])
     sampleIgnore = true;
     sampleRateFix = true;
     delayKeyOff = true;
+    keepRF5C68Cmds = false;
 
     // Open source for binary read (will fail if file does not exist)
     if ((infile = fopen(argv[1], "rb")) == NULL)
@@ -124,6 +132,8 @@ int main(int argc, char *argv[ ])
             sys = SYSTEM_NTSC;
         else if (!strcasecmp(argv[i], "-p"))
             sys = SYSTEM_PAL;
+        else if (!strcasecmp(argv[i], "-r"))
+            keepRF5C68Cmds = true;
         else
             printf("Warning: option %s not recognized (ignored)\n", argv[i]);
     }
@@ -139,7 +149,7 @@ int main(int argc, char *argv[ ])
     // VGM or empty (assumed as VGM)
     if (!strcasecmp(inExt, "VGM") || !strlen(inExt))
     {
-        if ((!strcasecmp(outExt, "VGM")) || (!strcasecmp(outExt, "XGM")) || (!strcasecmp(outExt, "BIN")) || (!strcasecmp(outExt, "XGC")))
+        if ((!strcasecmp(outExt, "VGM")) || (!strcasecmp(outExt, "XGM")) || (!strcasecmp(outExt, "BIN")) || (!strcasecmp(outExt, "XGC")) || (!strcasecmp(outExt, "ZGM")))
         {
             // VGM optimization
             int inDataSize;
@@ -177,6 +187,31 @@ int main(int argc, char *argv[ ])
                 if (outData == NULL) exit(1);
                 // write to file
                 writeBinaryFile(outData, outDataSize, argv[2]);
+            }
+            else if (!strcasecmp(outExt, "ZGM"))
+            {
+                // get byte array
+                unsigned char *outData2;
+                int outDataSize2;
+                unsigned char *lz;
+                int lzsize;
+                FILE *fp;
+
+                // split VGM command stream and PCM data blocks
+                outData = VGM_asByteArray2(vgm, &outDataSize, &outData2, &outDataSize2);
+                if (outData == NULL) exit(1);
+
+                // compress VGM stream
+                lzsize = lz77c_compress_buf(outData, outDataSize, (void **)&lz);
+                if (lz == NULL) exit(1);
+
+                // write to file
+                fp = fopen(argv[2], "wb");
+                fwrite(lz, 1, lzsize, fp);
+                fwrite(outData2, 1, outDataSize2, fp);
+                fclose(fp);
+
+                free(lz);
             }
             else
             {

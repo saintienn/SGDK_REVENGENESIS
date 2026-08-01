@@ -2,6 +2,9 @@ package sgdk.rescomp;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.util.List;
+
+import sgdk.rescomp.resource.Bin;
 
 public abstract class Resource
 {
@@ -25,6 +28,19 @@ public abstract class Resource
         return Compiler.addResource(resource, true);
     }
 
+    public static Resource addResource(Resource resource)
+    {
+        // add this resource as 'global' resource
+        return Compiler.addResource(resource, false);
+    }
+
+    public static Resource findResource(Resource resource)
+    {
+        return Compiler.findResource(resource);
+    }
+
+    public abstract List<Bin> getInternalBinResources();
+
     public abstract int internalHashCode();
 
     public abstract boolean internalEquals(Object obj);
@@ -32,7 +48,8 @@ public abstract class Resource
     @Override
     public int hashCode()
     {
-        return internalHashCode() ^ Boolean.valueOf(global).hashCode();
+        return internalHashCode();
+        // return internalHashCode() ^ Boolean.valueOf(global).hashCode();
     }
 
     @Override
@@ -42,7 +59,8 @@ public abstract class Resource
         {
             final Resource res = (Resource) obj;
             // fast discard from hash code and global state
-            return (hashCode() == res.hashCode()) && (global == res.global) && internalEquals(obj);
+            return (hashCode() == res.hashCode()) && internalEquals(obj);
+            // return (hashCode() == res.hashCode()) && (global == res.global) && internalEquals(obj);
         }
 
         return false;

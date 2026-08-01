@@ -1,16 +1,23 @@
 package sgdk.rescomp.tool;
 
+import java.awt.Color;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 
 import sgdk.aplib.APJ;
 import sgdk.lz4w.LZ4W;
+import sgdk.litepack.LITEPACK;
+import sgdk.megapack.MEGAPACK;
 import sgdk.rescomp.type.Basics.CollisionType;
 import sgdk.rescomp.type.Basics.Compression;
 import sgdk.rescomp.type.Basics.PackedData;
 import sgdk.rescomp.type.Basics.SoundDriver;
 import sgdk.rescomp.type.Basics.TileOptimization;
+import sgdk.rescomp.type.Basics.TileOrdering;
+import sgdk.rescomp.type.SpriteCell.OptimizationLevel;
 import sgdk.rescomp.type.SpriteCell.OptimizationType;
 import sgdk.tool.FileUtil;
 import sgdk.tool.StringUtil;
@@ -20,6 +27,15 @@ import sgdk.tool.TypeUtil;
 public class Util
 {
     final static String[] formatAsm = {"b", "b", "w", "w", "d"};
+
+    public static <T> List<T> asList(T element)
+    {
+        final List<T> result = new ArrayList<>();
+
+        result.add(element);
+
+        return result;
+    }
 
     public static short toVDPColor(byte b, byte g, byte r)
     {
@@ -35,15 +51,26 @@ public class Util
     {
         final String upText = text.toUpperCase();
 
-        if (StringUtil.isEmpty(upText) || StringUtil.equals(upText, "PCM") || StringUtil.equals(upText, "0"))
+        if (StringUtil.isEmpty(upText) || StringUtil.equals(upText, "PCM") || StringUtil.equals(upText, "DEFAULT"))
             return SoundDriver.PCM;
-        if (StringUtil.equals(upText, "2ADPCM") || StringUtil.equals(upText, "1"))
+        if (StringUtil.equals(upText, "DPCM2"))
             return SoundDriver.DPCM2;
-        if (StringUtil.equals(upText, "4PCM") || StringUtil.equals(upText, "2") || StringUtil.equals(upText, "3"))
+        if (StringUtil.equals(upText, "PCM4"))
             return SoundDriver.PCM4;
-        if (StringUtil.equals(upText, "XGM") || StringUtil.equals(upText, "4") || StringUtil.equals(upText, "5"))
+        if (StringUtil.equals(upText, "XGM"))
             return SoundDriver.XGM;
+        if (StringUtil.equals(upText, "XGM2"))
+            return SoundDriver.XGM2;
 
+        if (StringUtil.equals(upText, "0"))
+            throw new IllegalArgumentException("'" + text + "' is not anymore recognized as valid sound driver, use 'PCM' instead.");
+        if (StringUtil.equals(upText, "1"))
+            throw new IllegalArgumentException("'" + text + "' is not anymore recognized as valid sound driver, use 'DPCM2' instead.");
+        if (StringUtil.equals(upText, "2"))
+            throw new IllegalArgumentException("'" + text + "' is not anymore recognized as valid sound driver, use 'PCM4' instead.");
+        if (StringUtil.equals(upText, "3") || StringUtil.equals(upText, "4") || StringUtil.equals(upText, "5"))
+            throw new IllegalArgumentException("'" + text + "' is not anymore recognized as valid sound driver, use 'XGM' instead.");
+        
         throw new IllegalArgumentException("Unrecognized sound driver: '" + text + "'");
     }
 
@@ -59,6 +86,10 @@ public class Util
             return Compression.APLIB;
         if (StringUtil.equals(upText, "LZ4W") || StringUtil.equals(upText, "2") || StringUtil.equals(upText, "FAST"))
             return Compression.LZ4W;
+		if (StringUtil.equals(upText, "LITEPACK") || StringUtil.equals(upText, "3") || StringUtil.equals(upText, "LITE"))
+            return Compression.LITEPACK;
+		if (StringUtil.equals(upText, "MEGAPACK") || StringUtil.equals(upText, "4") || StringUtil.equals(upText, "BLAST"))
+            return Compression.MEGAPACK;
 
         throw new IllegalArgumentException("Unrecognized compression: '" + text + "'");
     }
@@ -91,7 +122,7 @@ public class Util
         throw new IllegalArgumentException("Unrecognized tilemap optimization: '" + text + "'");
     }
 
-    public static OptimizationType getSpriteOpt(String text)
+    public static OptimizationType getSpriteOptType(String text)
     {
         final String upText = text.toUpperCase();
 
@@ -104,7 +135,56 @@ public class Util
         if (StringUtil.equals(upText, "NONE") || StringUtil.equals(upText, "3"))
             return OptimizationType.NONE;
 
-        throw new IllegalArgumentException("Unrecognized sprite optimization: '" + text + "'");
+        throw new IllegalArgumentException("Unrecognized sprite optimization type: '" + text + "'");
+    }
+
+    public static OptimizationLevel getSpriteOptLevel(String text)
+    {
+        final String upText = text.toUpperCase();
+        final int value = StringUtil.parseInt(upText, -1);
+
+        if (StringUtil.isEmpty(upText) || StringUtil.equals(upText, "FAST") || (value == 0))
+            return OptimizationLevel.FAST;
+        if (StringUtil.equals(upText, "MEDIUM") || (value == 1))
+            return OptimizationLevel.MEDIUM;
+        // for backward compatibility with iteration value
+        if (StringUtil.equals(upText, "MAX")  || (value > 200000))
+            return OptimizationLevel.MAX;
+        // for backward compatibility with iteration value
+        if (StringUtil.equals(upText, "SLOW") || (value >= 10000))
+            return OptimizationLevel.SLOW;
+        
+        // for backward compatibility with iteration value
+        if (value != -1)
+            return OptimizationLevel.FAST;
+
+        throw new IllegalArgumentException("Unrecognized sprite optimization level: '" + text + "'");
+    }
+    
+    public static TileOrdering getTileOrdering(String text)
+    {
+        final String upText = text.toUpperCase();
+
+        if (StringUtil.equals(upText, "COLUMN"))
+            return TileOrdering.COLUMN;
+        if (StringUtil.equals(upText, "ROW"))
+            return TileOrdering.ROW;
+
+        throw new IllegalArgumentException("Unrecognized tile ordering: '" + text + "'");
+    }
+
+    public static Color getColor(String string)
+    {
+        final int value = Integer.decode("0x" + string).intValue();
+        return new Color(value, true);
+    }
+
+    public static String getAdjustedPath(String path, String baseFile)
+    {
+        if (FileUtil.isAbsolutePath(path))
+            return path;
+
+        return FileUtil.getDirectory(baseFile) + path;
     }
 
     public static byte[] sizeAlign(byte[] data, int align, byte fill)
@@ -138,8 +218,7 @@ public class Util
             outH.append("extern const " + type + " " + name + ";\n");
     }
 
-    public static void declArray(StringBuilder outS, StringBuilder outH, String type, String name, int size, int align,
-            boolean global)
+    public static void declArray(StringBuilder outS, StringBuilder outH, String type, String name, int size, int align, boolean global)
     {
         // asm declaration
         outS.append("    .align  " + ((align < 2) ? 2 : align) + "\n");
@@ -152,48 +231,86 @@ public class Util
             outH.append("extern const " + type + " " + name + "[" + size + "];\n");
     }
 
+    public static void declArrayEnd(StringBuilder outS, StringBuilder outH, String type, String name, int size, int align, boolean global)
+    {
+        // asm size label
+        if (global)
+            outS.append("    .global " + name + "_size\n");
+        outS.append(name + "_size = .-" + name + "\n");
+    }
+
+    // public static void outS(StringBuilder out, byte[] data, int intSize)
+    // {
+    // int offset = 0;
+    // // align remain on word
+    // int remain = ((data.length + 1) / 2) * 2;
+    // int adjIntSize = (intSize < 2) ? 2 : intSize;
+    //
+    // while (remain > 0)
+    // {
+    // out.append(" dc." + formatAsm[adjIntSize] + " ");
+    //
+    // for (int i = 0; i < Math.min(16, remain) / adjIntSize; i++)
+    // {
+    // if (i > 0)
+    // out.append(", ");
+    //
+    // out.append("0x");
+    //
+    // if (intSize == 1)
+    // {
+    // // we cannot use byte data because of GCC bugs with -G parameter
+    // out.append(StringUtil.toHexaString(TypeUtil.unsign(data[offset + 0]), 2));
+    //
+    // if ((offset + 1) >= data.length)
+    // out.append("00");
+    // else
+    // out.append(StringUtil.toHexaString(TypeUtil.unsign(data[offset + 1]), 2));
+    //
+    // offset += adjIntSize;
+    // }
+    // else
+    // {
+    // offset += adjIntSize;
+    //
+    // for (int j = 0; j < adjIntSize; j++)
+    // out.append(StringUtil.toHexaString(TypeUtil.unsign(data[offset - (j + 1)]), 2));
+    // }
+    // }
+    //
+    // out.append("\n");
+    // remain -= 16;
+    // }
+    // }
+
     public static void outS(StringBuilder out, byte[] data, int intSize)
     {
         int offset = 0;
-        // align remain on word
-        int remain = ((data.length + 1) / 2) * 2;
-        int adjIntSize = (intSize < 2) ? 2 : intSize;
+        int remain = data.length;
 
         while (remain > 0)
         {
-            out.append("    dc." + formatAsm[adjIntSize] + "    ");
+            out.append("    dc." + formatAsm[intSize] + "    ");
 
-            for (int i = 0; i < Math.min(16, remain) / adjIntSize; i++)
+            for (int i = 0; i < Math.min(16, remain) / intSize; i++)
             {
                 if (i > 0)
                     out.append(", ");
 
                 out.append("0x");
 
-                if (intSize == 1)
-                {
-                    // we cannot use byte data because of GCC bugs with -G parameter
-                    out.append(StringUtil.toHexaString(TypeUtil.unsign(data[offset + 0]), 2));
-
-                    if ((offset + 1) >= data.length)
-                        out.append("00");
-                    else
-                        out.append(StringUtil.toHexaString(TypeUtil.unsign(data[offset + 1]), 2));
-
-                    offset += adjIntSize;
-                }
-                else
-                {
-                    offset += adjIntSize;
-
-                    for (int j = 0; j < adjIntSize; j++)
-                        out.append(StringUtil.toHexaString(TypeUtil.unsign(data[offset - (j + 1)]), 2));
-                }
+                offset += intSize;
+                for (int j = 0; j < intSize; j++)
+                    out.append(StringUtil.toHexaString(TypeUtil.unsign(data[offset - (j + 1)]), 2));
             }
 
             out.append("\n");
             remain -= 16;
         }
+
+        // better to pad data to word
+        if ((intSize == 1) && ((data.length & 1) != 0))
+            out.append("    dc.b    0x00\n");
     }
 
     public static byte[] in(String fin)
@@ -339,8 +456,19 @@ public class Util
         outB(out, data, 0);
     }
 
-    public static PackedData pack(byte[] data, Compression compression, ByteArrayOutputStream bin,
-            boolean forceSelectedCompression)
+    public static boolean isCompressionValuable(Compression compressionMethod, int compressedSize, int uncompressedSize)
+    {
+        final int minDiff = (compressionMethod == Compression.APLIB) ? 120 : 60;
+
+        if ((uncompressedSize - compressedSize) <= minDiff)
+            return false;
+
+        final double maxPourcentage = (compressionMethod == Compression.APLIB) ? 85 : 95;
+
+        return Math.round((compressedSize * 100f) / uncompressedSize) <= maxPourcentage;
+    }
+
+    public static PackedData pack(byte[] data, Compression compression, ByteArrayOutputStream bin, boolean forceSelectedCompression)
     {
         // nothing to do
         if (compression == Compression.NONE)
@@ -358,18 +486,59 @@ public class Util
             if (forceSelectedCompression)
             {
                 if (result == null)
-                    throw new RuntimeException(
-                            "Cannot use desired compression on resource ! Try removing compression.");
+                    throw new RuntimeException("Cannot use wanted compression on resource, try removing compression.");
             }
             else
             {
-                // error or no compression possible ? return origin data
-                if ((result == null) || (result.length >= data.length))
+                // error or no good compression ? return origin data
+                if ((result == null) || !isCompressionValuable(Compression.LZ4W, result.length, data.length))
                     return new PackedData(data, Compression.NONE);
             }
 
             // return compressed result
             return new PackedData(result, Compression.LZ4W);
+        }
+
+		
+
+		if (compression == Compression.LITEPACK)
+        {
+            final byte[] result = litepackpack((bin != null) ? bin.toByteArray() : null, data);
+
+            if (forceSelectedCompression)
+            {
+                if (result == null)
+                    throw new RuntimeException("Cannot use wanted compression on resource, try removing compression.");
+            }
+            else
+            {
+                // error or no good compression ? return origin data
+                if ((result == null) || !isCompressionValuable(Compression.LITEPACK, result.length, data.length))
+                    return new PackedData(data, Compression.NONE);
+            }
+
+            // return compressed result
+            return new PackedData(result, Compression.LITEPACK);
+        }
+
+		if (compression == Compression.MEGAPACK)
+        {
+            final byte[] result = megapackpack((bin != null) ? bin.toByteArray() : null, data);
+
+            if (forceSelectedCompression)
+            {
+                if (result == null)
+                    throw new RuntimeException("Cannot use wanted compression on resource, try removing compression.");
+            }
+            else
+            {
+                // error or no good compression ? return origin data
+                if ((result == null) || !isCompressionValuable(Compression.MEGAPACK, result.length, data.length))
+                    return new PackedData(data, Compression.NONE);
+            }
+
+            // return compressed result
+            return new PackedData(result, Compression.MEGAPACK);
         }
 
         // we don't count AUTO
@@ -413,6 +582,15 @@ public class Util
                         out = lz4wpack(prevData, data);
                         break;
 
+
+					case LITEPACK:
+                        out = litepackpack(prevData, data);
+                        break;
+
+					case MEGAPACK:
+                        out = megapackpack(prevData, data);
+                        break;
+
                     default:
                         out = null;
                         break;
@@ -422,8 +600,7 @@ public class Util
                 if (forceSelectedCompression)
                 {
                     if (out == null)
-                        throw new RuntimeException(
-                                "Cannot use desired compression on resource ! Try removing compression.");
+                        throw new RuntimeException("Cannot use desired compression on resource ! Try removing compression.");
 
                     // directly return result
                     return new PackedData(out, comp);
@@ -453,7 +630,7 @@ public class Util
 
             if (results[compIndex] != null)
             {
-                if (sizes[compIndex] < minSize)
+                if (isCompressionValuable(comp, sizes[compIndex], sizes[0]) && (sizes[compIndex] < minSize))
                 {
                     minSize = sizes[compIndex];
                     result = results[compIndex];
@@ -489,8 +666,7 @@ public class Util
         FileUtil.delete(fout, false);
 
         // build complete command line
-        final String[] cmd = new String[] {"java", "-jar",
-                FileUtil.adjustPath(sgdk.rescomp.Compiler.currentDir, "apj.jar"), "p", fin, fout, "-s"};
+        final String[] cmd = new String[] {"java", "-jar", FileUtil.adjustPath(sgdk.rescomp.Compiler.currentDir, "apj.jar"), "p", fin, fout, "-s"};
 
         String cmdLine = "";
         for (String s : cmd)
@@ -548,8 +724,116 @@ public class Util
         FileUtil.delete(fout, false);
 
         // build complete command line
-        final String[] cmd = new String[] {"java", "-jar",
-                FileUtil.adjustPath(sgdk.rescomp.Compiler.currentDir, "lz4w.jar"), "p",
+        final String[] cmd = new String[] {"java", "-jar", FileUtil.adjustPath(sgdk.rescomp.Compiler.currentDir, "lz4w.jar"), "p",
+                (!StringUtil.isEmpty(prev) ? prev + "@" : "") + fin, fout, "-s"};
+        // final String[] cmd = new String[] {"java", "-jar",
+        // FileUtil.adjustPath(sgdk.rescomp.Compiler.currentDir, "lz4w.jar"), "p", fin, fout, "-s"};
+
+        String cmdLine = "";
+        for (String s : cmd)
+            cmdLine += s + " ";
+        System.out.println("Executing " + cmdLine);
+
+        // execute
+        final Process p = SystemUtil.exec(cmd, true);
+
+        try
+        {
+            // wait for execution
+            p.waitFor();
+        }
+        catch (InterruptedException e)
+        {
+            // ignore
+        }
+
+        // file exist --> ok
+        return FileUtil.exists(fout);
+    }
+
+	
+	public static byte[] litepackpack(byte[] prev, byte[] data)
+    {
+        final int prevLen = (prev != null) ? prev.length : 0;
+        final byte[] buf = new byte[prevLen + data.length];
+
+        if (prev != null)
+            System.arraycopy(prev, 0, buf, 0, prevLen);
+        System.arraycopy(data, 0, buf, prevLen, data.length);
+
+        try
+        {
+            try
+            {
+                return LITEPACK.pack(buf, prevLen, true);
+            }
+            catch (IllegalArgumentException e1)
+            {
+                // try to pack without previous data block then
+                return LITEPACK.pack(data, 0, true);
+            }
+        }
+        catch (Exception e)
+        {
+            System.err.println(e.getMessage());
+            return null;
+        }
+    }
+
+	public static byte[] megapackpack(byte[] prev, byte[] data)
+	{
+		// MEGAPACK não suporta dicionário externo — comprime sempre a partir do início
+		try
+		{
+			return MEGAPACK.pack(data, 0, true);
+		}
+		catch (Exception e)
+		{
+			System.err.println(e.getMessage());
+			return null;
+		}
+	}
+
+	public static boolean megapackpack(String prev, String fin, String fout)
+    {
+        // better to remove output file for MEGAPACK
+        FileUtil.delete(fout, false);
+
+        // build complete command line
+        final String[] cmd = new String[] {"java", "-jar", FileUtil.adjustPath(sgdk.rescomp.Compiler.currentDir, "megapack.jar"), "p",
+                (!StringUtil.isEmpty(prev) ? prev + "@" : "") + fin, fout, "-s"};
+        // final String[] cmd = new String[] {"java", "-jar",
+        // FileUtil.adjustPath(sgdk.rescomp.Compiler.currentDir, "lz4w.jar"), "p", fin, fout, "-s"};
+
+        String cmdLine = "";
+        for (String s : cmd)
+            cmdLine += s + " ";
+        System.out.println("Executing " + cmdLine);
+
+        // execute
+        final Process p = SystemUtil.exec(cmd, true);
+
+        try
+        {
+            // wait for execution
+            p.waitFor();
+        }
+        catch (InterruptedException e)
+        {
+            // ignore
+        }
+
+        // file exist --> ok
+        return FileUtil.exists(fout);
+    }
+
+    public static boolean litepackpack(String prev, String fin, String fout)
+    {
+        // better to remove output file for lz4w
+        FileUtil.delete(fout, false);
+
+        // build complete command line
+        final String[] cmd = new String[] {"java", "-jar", FileUtil.adjustPath(sgdk.rescomp.Compiler.currentDir, "litepack.jar"), "p",
                 (!StringUtil.isEmpty(prev) ? prev + "@" : "") + fin, fout, "-s"};
         // final String[] cmd = new String[] {"java", "-jar",
         // FileUtil.adjustPath(sgdk.rescomp.Compiler.currentDir, "lz4w.jar"), "p", fin, fout, "-s"};
@@ -582,8 +866,8 @@ public class Util
         FileUtil.delete(fout, false);
 
         // build complete command line
-        final String[] cmd = new String[] {FileUtil.adjustPath(sgdk.rescomp.Compiler.currentDir, "xgmtool"), fin, fout,
-                "-s", (timing == 0) ? "-n" : ((timing == 1) ? "-p" : ""), (options != null) ? options : ""};
+        final String[] cmd = new String[] {FileUtil.adjustPath(sgdk.rescomp.Compiler.currentDir, "xgmtool"), fin, fout, "-s",
+                (timing == 0) ? "-n" : ((timing == 1) ? "-p" : ""), (options != null) ? options : ""};
 
         String cmdLine = "";
         for (String s : cmd)
@@ -591,11 +875,49 @@ public class Util
         // just to remove the warning with unrecognized parameter
         while (cmdLine.endsWith(" "))
             cmdLine = StringUtil.removeLast(cmdLine, 1);
-        
+
         System.out.println("Executing " + cmdLine);
 
         // execute
         final Process p = SystemUtil.exec(cmd, true);
+
+        try
+        {
+            // wait for execution
+            p.waitFor();
+        }
+        catch (InterruptedException e)
+        {
+            // ignore
+        }
+
+        // file exist --> ok
+        return FileUtil.exists(fout);
+    }
+
+    public static boolean xgm2tool(List<String> fins, String fout, String options)
+    {
+        // better to remove output file
+        FileUtil.delete(fout, false);
+
+        // build complete command line
+        final List<String> cmd = new ArrayList<>();
+        cmd.add("java");
+        cmd.add("-jar");
+        cmd.add(FileUtil.adjustPath(sgdk.rescomp.Compiler.currentDir, "xgm2tool.jar"));
+        for(String fin: fins)
+            cmd.add(fin);
+        cmd.add(fout);
+        if (!StringUtil.isEmpty(options))
+            cmd.add(options);
+        cmd.add("-s");
+
+        final String cmdLine = String.join(" ", cmd).trim();
+
+        System.out.println("Executing " + cmdLine);
+
+        // execute
+        final Process p = SystemUtil.exec(cmd.toArray(new String[cmd.size()]), true);
 
         try
         {

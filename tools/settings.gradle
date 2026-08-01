@@ -1,0 +1,15 @@
+gradle.beforeProject { p ->
+    p.plugins.withId("eclipse") {
+        throw new GradleException("Eclipse plugin is not allowed in this project.")
+    }
+}
+
+rootProject.name = 'sgdk-tools'
+include('apj', 'lz4w', 'litepack','megapack', 'commons', 'rescomp')
+
+project(':litepack').projectDir = file('litepack')
+project(':megapack').projectDir = file('megapack')
+project(':apj').projectDir = file('apj')
+project(':commons').projectDir = file('commons')
+project(':lz4w').projectDir = file('lz4w')
+project(':rescomp').projectDir = file('rescomp')

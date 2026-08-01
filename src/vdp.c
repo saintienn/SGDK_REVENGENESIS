@@ -15,8 +15,8 @@
 #include "sys.h"
 #include "task.h"
 
-#include "font.h"
 #include "sprite_eng.h"
+#include "sprite_eng_legacy.h"
 
 
 #define WINDOW_DEFAULT          0xD000      // multiple of 0x1000 (0x0800 in H32)
@@ -32,7 +32,7 @@ extern u32 task_pc;
 extern bool addFrameLoad(u16 frameLoad, u32 vtime);
 
 // forward
-static void updateMapsAddress();
+static void updateMapsAddress(bool initializing);
 static bool computeFrameCPULoad(u16 blank, u16 vcnt, u32 vtime);
 u16 getAdjustedVCounterInternal(u16 blank, u16 vcnt);
 void updateUserTileMaxIndex();
@@ -61,7 +61,7 @@ u16 windowWidthSft;
 u16 lastVCnt;
 
 
-void VDP_init()
+NO_INLINE void VDP_init()
 {
     vu16 *pw;
     u16 i;
@@ -88,7 +88,7 @@ void VDP_init()
     lastVCnt = 0;
 
     regValues[0x00] = 0x04;
-    regValues[0x01] = 0x74;                     /* reg. 1 - Enable display, VBL, DMA + VCell size */
+    regValues[0x01] = 0x74;                     /* reg. 1 - Enable display, V-Int, DMA + VCell size */
     regValues[0x02] = bga_addr / 0x400;         /* reg. 2 - Plane A = $E000 */
     regValues[0x03] = window_addr / 0x400;      /* reg. 3 - Window  = $D000 */
     regValues[0x04] = bgb_addr / 0x2000;        /* reg. 4 - Plane B = $C000 */
@@ -108,12 +108,12 @@ void VDP_init()
     regValues[0x12] = 0x00;                     /* reg 18 - window vpos */
 
     // set registers
-    pw = (u16 *) GFX_CTRL_PORT;
+    pw = (u16 *) VDP_CTRL_PORT;
     for (i = 0x00; i < 0x13; i++) *pw = 0x8000 | (i << 8) | regValues[i];
 
     maps_addr = 0;
     // update minimum address of all tilemap/table (default is plane B)
-    updateMapsAddress();
+    updateMapsAddress(TRUE);
 
     // clear VRAM, reset palettes / default tiles / font and scroll mode
     VDP_resetScreen();
@@ -130,9 +130,13 @@ void VDP_init()
 }
 
 
-void VDP_resetScreen()
+NO_INLINE void VDP_resetScreen()
 {
     u16 i;
+    bool enable = VDP_isEnable();
+
+    // for faster operation
+    VDP_setEnable(FALSE);
 
     // reset video memory (len = 0 is a special value to define 0x10000)
     DMA_doVRamFill(0, 0, 0, 1);
@@ -164,8 +168,10 @@ void VDP_resetScreen()
     }
 
     // load default font
-    if (!VDP_loadFont(&font_default, CPU))
+    if (!VDP_loadDefaultFont(DMA))
     {
+        VDP_setEnable(TRUE);
+
         KLog("A fatal error occured (not enough memory to reset VDP) !");
 
         // fatal error --> die here (the font did not get loaded so maybe not really useful to show this message...)
@@ -177,6 +183,10 @@ void VDP_resetScreen()
         // stop here
         while(TRUE);
     }
+
+    // re-enable
+    if (enable)
+        VDP_setEnable(TRUE);
 }
 
 
@@ -213,7 +223,7 @@ void VDP_setReg(u16 reg, u8 value)
             v = value & 0x38;
             // update plane address
             bga_addr = v * 0x400;
-            updateMapsAddress();
+            updateMapsAddress(FALSE);
             break;
 
         case 0x03:
@@ -222,14 +232,14 @@ void VDP_setReg(u16 reg, u8 value)
             // 32H mode
             else v = value & 0x3E;
             window_addr = v * 0x0400;
-            updateMapsAddress();
+            updateMapsAddress(FALSE);
             break;
 
         case 0x04:
             v = value & 0x7;
             // update text plane address
             bgb_addr = v * 0x2000;
-            updateMapsAddress();
+            updateMapsAddress(FALSE);
             break;
 
         case 0x05:
@@ -238,7 +248,7 @@ void VDP_setReg(u16 reg, u8 value)
             // 32H mode
             else v = value & 0x7F;
             slist_addr = v * 0x0200;
-            updateMapsAddress();
+            updateMapsAddress(FALSE);
             break;
 
         case 0x0C:
@@ -260,7 +270,7 @@ void VDP_setReg(u16 reg, u8 value)
         case 0x0D:
             v = value & 0x3F;
             hscrl_addr = v * 0x0400;
-            updateMapsAddress();
+            updateMapsAddress(FALSE);
             break;
 
         case 0x10:
@@ -300,13 +310,18 @@ void VDP_setReg(u16 reg, u8 value)
 
     if (reg < 0x13) regValues[reg] = v;
 
-    pw = (u16 *) GFX_CTRL_PORT;
+    pw = (u16 *) VDP_CTRL_PORT;
     *pw = 0x8000 | (reg << 8) | v;
 }
 
 bool VDP_getEnable()
 {
     return regValues[0x01] & 0x40;
+}
+
+bool VDP_isEnable()
+{
+    return VDP_getEnable();
 }
 
 void VDP_setEnable(bool value)
@@ -316,7 +331,7 @@ void VDP_setEnable(bool value)
     if (value) regValues[0x01] |= 0x40;
     else regValues[0x01] &= ~0x40;
 
-    pw = (u16 *) GFX_CTRL_PORT;
+    pw = (u16 *) VDP_CTRL_PORT;
     *pw = 0x8100 | regValues[0x01];
 }
 
@@ -339,7 +354,7 @@ void VDP_setScreenHeight224()
     regValues[0x01] &= ~0x08;
     screenHeight = 224;
 
-    pw = (u16 *) GFX_CTRL_PORT;
+    pw = (u16 *) VDP_CTRL_PORT;
     *pw = 0x8100 | regValues[0x01];
 }
 
@@ -352,7 +367,7 @@ void VDP_setScreenHeight240()
         regValues[0x01] |= 0x08;
         screenHeight = 240;
 
-        pw = (u16 *) GFX_CTRL_PORT;
+        pw = (u16 *) VDP_CTRL_PORT;
         *pw = 0x8100 | regValues[0x01];
     }
 }
@@ -371,7 +386,7 @@ void VDP_setScreenWidth256()
     windowWidth = 32;
     windowWidthSft = 5;
 
-    pw = (u16 *) GFX_CTRL_PORT;
+    pw = (u16 *) VDP_CTRL_PORT;
     *pw = 0x8C00 | regValues[0x0C];
 }
 
@@ -384,7 +399,7 @@ void VDP_setScreenWidth320()
     windowWidth = 64;
     windowWidthSft = 6;
 
-    pw = (u16 *) GFX_CTRL_PORT;
+    pw = (u16 *) VDP_CTRL_PORT;
     *pw = 0x8C00 | regValues[0x0C];
 }
 
@@ -399,7 +414,7 @@ u16 VDP_getPlaneHeight()
     return planeHeight;
 }
 
-void VDP_setPlaneSize(u16 w, u16 h, bool setupVram)
+NO_INLINE void VDP_setPlaneSize(u16 w, u16 h, bool setupVram)
 {
     vu16 *pw;
     u16 v = 0;
@@ -460,7 +475,7 @@ void VDP_setPlaneSize(u16 w, u16 h, bool setupVram)
 
     regValues[0x10] = v;
 
-    pw = (u16 *) GFX_CTRL_PORT;
+    pw = (u16 *) VDP_CTRL_PORT;
     *pw = 0x9000 | regValues[0x10];
 
     if (setupVram)
@@ -470,9 +485,9 @@ void VDP_setPlaneSize(u16 w, u16 h, bool setupVram)
             case 10:
                 // 2KB tilemap VRAM setup: 0xC000 --> 0xEFFF
                 // 0xD000-0xDFFF free
-                VDP_setBPlanAddress(0xC000);
+                VDP_setBGBAddress(0xC000);
                 VDP_setWindowAddress(0xC800);
-                VDP_setAPlanAddress(0xE000);
+                VDP_setBGAAddress(0xE000);
                 VDP_setSpriteListAddress(0xE800);
                 VDP_setHScrollTableAddress(0xEC00);
                 break;
@@ -480,9 +495,9 @@ void VDP_setPlaneSize(u16 w, u16 h, bool setupVram)
             case 11:
                 // 4KB tilemap VRAM setup: 0xC000 --> 0xFFFF
                 // 0xF700-0xFFFF free
-                VDP_setBPlanAddress(0xC000);
+                VDP_setBGBAddress(0xC000);
                 VDP_setWindowAddress(0xD000);
-                VDP_setAPlanAddress(0xE000);
+                VDP_setBGAAddress(0xE000);
                 VDP_setHScrollTableAddress(0xF000);
                 VDP_setSpriteListAddress(0xF400);
                 break;
@@ -493,18 +508,13 @@ void VDP_setPlaneSize(u16 w, u16 h, bool setupVram)
                 VDP_setSpriteListAddress(0xAC00);
                 VDP_setHScrollTableAddress(0xA800);
                 VDP_setWindowAddress(0xB000);
-                VDP_setBPlanAddress(0xC000);
-                VDP_setAPlanAddress(0xE000);
+                VDP_setBGBAddress(0xC000);
+                VDP_setBGAAddress(0xE000);
                 break;
         }
 
-        updateMapsAddress();
+        updateMapsAddress(FALSE);
     }
-}
-
-void VDP_setPlanSize(u16 w, u16 h)
-{
-    VDP_setPlaneSize(w, h, FALSE);
 }
 
 u8 VDP_getVerticalScrollingMode()
@@ -524,7 +534,7 @@ void VDP_setScrollingMode(u16 hscroll, u16 vscroll)
     regValues[0x0B] &= ~0x07;
     regValues[0x0B] |= ((vscroll & 1) << 2) | (hscroll & 3);
 
-    pw = (u16 *) GFX_CTRL_PORT;
+    pw = (u16 *) VDP_CTRL_PORT;
     *pw = 0x8B00 | regValues[0x0B];
 }
 
@@ -540,7 +550,7 @@ void VDP_setBackgroundColor(u8 value)
 
     regValues[0x07] = value & 0x3F;
 
-    pw = (u16 *) GFX_CTRL_PORT;
+    pw = (u16 *) VDP_CTRL_PORT;
     *pw = 0x8700 | regValues[0x07];
 }
 
@@ -556,7 +566,7 @@ void VDP_setAutoInc(u8 value)
 
     regValues[0x0F] = value;
 
-    pw = (u16 *) GFX_CTRL_PORT;
+    pw = (u16 *) VDP_CTRL_PORT;
     *pw = 0x8F00 | value;
 }
 
@@ -566,14 +576,14 @@ u8 VDP_getDMAEnabled()
     return regValues[0x01] & 0x10;
 }
 
-void VDP_setDMAEnabled(u8 value)
+void VDP_setDMAEnabled(bool value)
 {
     vu16 *pw;
 
     if (value) regValues[0x01] |= 0x10;
     else regValues[0x01] &= ~0x10;
 
-    pw = (u16 *) GFX_CTRL_PORT;
+    pw = (u16 *) VDP_CTRL_PORT;
     *pw = 0x8100 | regValues[0x01];
 }
 
@@ -582,47 +592,58 @@ u8 VDP_getHVLatching()
     return regValues[0x00] & 0x02;
 }
 
-void VDP_setHVLatching(u8 value)
+void VDP_setHVLatching(bool value)
 {
     vu16 *pw;
 
     if (value) regValues[0x00] |= 0x02;
     else regValues[0x00] &= ~0x02;
 
-    pw = (u16 *) GFX_CTRL_PORT;
+    pw = (u16 *) VDP_CTRL_PORT;
     *pw = 0x8000 | regValues[0x00];
 }
 
-void VDP_setHInterrupt(u8 value)
+void VDP_setVInterrupt(bool value)
+{
+    vu16 *pw;
+
+    if (value) regValues[0x01] |= 0x20;
+    else regValues[0x01] &= ~0x20;
+
+    pw = (u16 *) VDP_CTRL_PORT;
+    *pw = 0x8100 | regValues[0x01];
+}
+
+void VDP_setHInterrupt(bool value)
 {
     vu16 *pw;
 
     if (value) regValues[0x00] |= 0x10;
     else regValues[0x00] &= ~0x10;
 
-    pw = (u16 *) GFX_CTRL_PORT;
+    pw = (u16 *) VDP_CTRL_PORT;
     *pw = 0x8000 | regValues[0x00];
 }
 
-void VDP_setExtInterrupt(u8 value)
+void VDP_setExtInterrupt(bool value)
 {
     vu16 *pw;
 
     if (value) regValues[0x0B] |= 0x08;
     else regValues[0x0B] &= ~0x08;
 
-    pw = (u16 *) GFX_CTRL_PORT;
+    pw = (u16 *) VDP_CTRL_PORT;
     *pw = 0x8B00 | regValues[0x0B];
 }
 
-void VDP_setHilightShadow(u8 value)
+void VDP_setHilightShadow(bool value)
 {
     vu16 *pw;
 
     if (value) regValues[0x0C] |= 0x08;
     else regValues[0x0C] &= ~0x08;
 
-    pw = (u16 *) GFX_CTRL_PORT;
+    pw = (u16 *) VDP_CTRL_PORT;
     *pw = 0x8C00 | regValues[0x0C];
 }
 
@@ -638,7 +659,7 @@ void VDP_setHIntCounter(u8 value)
 
     regValues[0x0A] = value;
 
-    pw = (u16 *) GFX_CTRL_PORT;
+    pw = (u16 *) VDP_CTRL_PORT;
     *pw = 0x8A00 | regValues[0x0A];
 }
 
@@ -653,24 +674,9 @@ u16 VDP_getBGBAddress()
     return bgb_addr;
 }
 
-u16 VDP_getAPlanAddress()
-{
-    return VDP_getBGAAddress();
-}
-
-u16 VDP_getBPlanAddress()
-{
-    return VDP_getBGBAddress();
-}
-
 u16 VDP_getWindowAddress()
 {
     return window_addr;
-}
-
-u16 VDP_getWindowPlanAddress()
-{
-    return VDP_getWindowAddress();
 }
 
 u16 VDP_getSpriteListAddress()
@@ -689,11 +695,11 @@ void VDP_setBGAAddress(u16 value)
     vu16 *pw;
 
     bga_addr = value & 0xE000;
-    updateMapsAddress();
+    updateMapsAddress(FALSE);
 
     regValues[0x02] = bga_addr / 0x400;
 
-    pw = (u16 *) GFX_CTRL_PORT;
+    pw = (u16 *) VDP_CTRL_PORT;
     *pw = 0x8200 | regValues[0x02];
 }
 
@@ -702,22 +708,12 @@ void VDP_setBGBAddress(u16 value)
     vu16 *pw;
 
     bgb_addr = value & 0xE000;
-    updateMapsAddress();
+    updateMapsAddress(FALSE);
 
     regValues[0x04] = bgb_addr / 0x2000;
 
-    pw = (u16 *) GFX_CTRL_PORT;
+    pw = (u16 *) VDP_CTRL_PORT;
     *pw = 0x8400 | regValues[0x04];
-}
-
-void VDP_setAPlanAddress(u16 value)
-{
-    VDP_setBGAAddress(value);
-}
-
-void VDP_setBPlanAddress(u16 value)
-{
-    VDP_setBGBAddress(value);
 }
 
 void VDP_setWindowAddress(u16 value)
@@ -728,17 +724,12 @@ void VDP_setWindowAddress(u16 value)
     if (regValues[0x0C] & 0x81) window_addr = value & 0xF000;
     // 32H mode
     else window_addr = value & 0xF800;
-    updateMapsAddress();
+    updateMapsAddress(FALSE);
 
     regValues[0x03] = window_addr / 0x400;
 
-    pw = (u16 *) GFX_CTRL_PORT;
+    pw = (u16 *) VDP_CTRL_PORT;
     *pw = 0x8300 | regValues[0x03];
-}
-
-void VDP_setWindowPlanAddress(u16 value)
-{
-    VDP_setWindowAddress(value);
 }
 
 void VDP_setSpriteListAddress(u16 value)
@@ -749,11 +740,11 @@ void VDP_setSpriteListAddress(u16 value)
     if (regValues[0x0C] & 0x81) slist_addr = value & 0xFC00;
     // 32H mode
     else slist_addr = value & 0xFE00;
-    updateMapsAddress();
+    updateMapsAddress(FALSE);
 
     regValues[0x05] = slist_addr / 0x200;
 
-    pw = (u16 *) GFX_CTRL_PORT;
+    pw = (u16 *) VDP_CTRL_PORT;
     *pw = 0x8500 | regValues[0x05];
 }
 
@@ -762,11 +753,11 @@ void VDP_setHScrollTableAddress(u16 value)
     vu16 *pw;
 
     hscrl_addr = value & 0xFC00;
-    updateMapsAddress();
+    updateMapsAddress(FALSE);
 
     regValues[0x0D] = hscrl_addr / 0x400;
 
-    pw = (u16 *) GFX_CTRL_PORT;
+    pw = (u16 *) VDP_CTRL_PORT;
     *pw = 0x8D00 | regValues[0x0D];
 }
 
@@ -784,7 +775,7 @@ void VDP_setScanMode(u16 value)
         // interlace mode 2
         regValues[0x0C] |= 0x06;
 
-    pw = (u16 *) GFX_CTRL_PORT;
+    pw = (u16 *) VDP_CTRL_PORT;
     *pw = 0x8C00 | regValues[0x0C];
 }
 
@@ -798,7 +789,7 @@ void VDP_setWindowHPos(u16 right, u16 pos)
 
     regValues[0x11] = v;
 
-    pw = (u16 *) GFX_CTRL_PORT;
+    pw = (u16 *) VDP_CTRL_PORT;
     *pw = 0x9100 | v;
 }
 
@@ -812,10 +803,40 @@ void VDP_setWindowVPos(u16 down, u16 pos)
 
     regValues[0x12] = v;
 
-    pw = (u16 *) GFX_CTRL_PORT;
+    pw = (u16 *) VDP_CTRL_PORT;
     *pw = 0x9200 | v;
 }
 
+void VDP_setWindowOff() 
+{
+    VDP_setWindowVPos(false, 0);
+    VDP_setWindowHPos(false, 0);
+}
+
+void VDP_setWindowOnTop(u16 rows) 
+{
+    VDP_setWindowVPos(false, rows);
+}
+
+void VDP_setWindowOnBottom(u16 rows) 
+{
+    VDP_setWindowVPos(true, (screenHeight / 8) - rows);
+}
+
+void VDP_setWindowOnLeft(u16 cols) 
+{
+    VDP_setWindowHPos(false, cols);
+}
+
+void VDP_setWindowOnRight(u16 cols) 
+{
+    VDP_setWindowHPos(true, (screenWidth / 16) - cols);
+}
+
+void VDP_setWindowFullScreen()
+{
+    VDP_setWindowVPos(false, screenHeight / 8);
+}
 
 void VDP_waitDMACompletion()
 {
@@ -828,7 +849,7 @@ void VDP_waitFIFOEmpty()
 }
 
 
-bool VDP_waitVInt()
+NO_INLINE bool VDP_waitVInt()
 {
     // in VInt --> return
     if (SYS_isInVInt()) return FALSE;
@@ -862,9 +883,9 @@ bool VDP_waitVInt()
 }
 
 
-bool VDP_waitVBlank(bool forceNext)
+NO_INLINE bool VDP_waitVBlank(bool forceNext)
 {
-    vu16 *pw = (u16 *) GFX_CTRL_PORT;
+    vu16 *pw = (u16 *) VDP_CTRL_PORT;
 
     // initial frame counter
     const u32 t = vtimer;
@@ -873,11 +894,13 @@ bool VDP_waitVBlank(bool forceNext)
     const u16 blank = *pw & VDP_VBLANK_FLAG;
     // have an user task (multitasking) ?
     const bool yield_to_user = (task_pc != NULL);
+    // VDP enable
+    const bool enabled = VDP_isEnable();
     // save it (used to diplay frame load)
     lastVCnt = vcnt;
 
     // we want to wait for next start of VBlank ? (only if no multitasking)
-    if (forceNext && blank && !yield_to_user)
+    if (forceNext && blank && enabled && !yield_to_user)
     {
         // wait end of vblank if already in vblank
         while (*pw & VDP_VBLANK_FLAG);
@@ -889,8 +912,8 @@ bool VDP_waitVBlank(bool forceNext)
 #if (LIB_LOG_LEVEL >= LOG_LEVEL_WARNING)
     if (late)
     {
-        // we cannot detect late frame if HV latching is enabled..
-        if (!VDP_getHVLatching())
+        // we cannot detect late frame if VDP is disabled or HV latching is enabled
+        if (enabled && !VDP_getHVLatching())
         {
             if (forceNext)
                 KLog_U2("Warning: frame missed detection on frame #", vtimer, " - V-Counter = ", vcnt);
@@ -910,7 +933,7 @@ bool VDP_waitVBlank(bool forceNext)
 
 void VDP_waitVActive(bool forceNext)
 {
-    vu16 *pw = (u16 *) GFX_CTRL_PORT;
+    vu16 *pw = (u16 *) VDP_CTRL_PORT;
 
     // we want to wait for next start of VActive ?
     if (forceNext)
@@ -918,8 +941,12 @@ void VDP_waitVActive(bool forceNext)
         // wait end of vactive if already in vactive
         while (!(*pw & VDP_VBLANK_FLAG));
     }
-    // wait end of vblank
-    while (*pw & VDP_VBLANK_FLAG);
+    // we stay blank forever if VDP is disabled..
+    if (VDP_isEnable())
+    {
+        // wait end of vblank
+        while (*pw & VDP_VBLANK_FLAG);
+    }
 }
 
 bool VDP_waitVSync()
@@ -965,35 +992,33 @@ u16 VDP_getAdjustedVCounter()
 }
 
 
-void VDP_showFPS(u16 asFloat)
+void VDP_showFPS(u16 asFloat, u16 x, u16 y)
 {
     char str[16];
 
     if (asFloat)
     {
         fix32ToStr(SYS_getFPSAsFloat(), str, 1);
-        VDP_clearText(2, 1, 5);
+        // display FPS
+        VDP_drawTextFill(str, x, y, 4);
     }
     else
     {
         uintToStr(SYS_getFPS(), str, 1);
-        VDP_clearText(2, 1, 2);
+        // display FPS
+        VDP_drawTextFill(str, x, y, 2);
     }
-
-    // display FPS
-    VDP_drawText(str, 1, 1);
 }
 
-void VDP_showCPULoad()
+void VDP_showCPULoad(u16 x, u16 y)
 {
     char str[16];
 
     uintToStr(SYS_getCPULoad(), str, 1);
     strcat(str, "%");
 
-    VDP_clearText(2, 2, 4);
-    // display FPS
-    VDP_drawText(str, 1, 2);
+    // display CPU load
+    VDP_drawTextFill(str, x, y, 4);
 }
 
 
@@ -1003,7 +1028,7 @@ void updateUserTileMaxIndex()
     userTileMaxIndex = TILE_FONT_INDEX - spriteVramSize;
 }
 
-static void updateMapsAddress()
+static void updateMapsAddress(bool initializing)
 {
     u16 min_addr = window_addr;
 
@@ -1016,13 +1041,17 @@ static void updateMapsAddress()
     if (min_addr != maps_addr)
     {
         maps_addr = min_addr;
-        // reload default font as its VRAM address has changed
-        VDP_loadFont(&font_default, CPU);
         // update user max tile index
         updateUserTileMaxIndex();
 
-        // re-pack memory as VDP_lontFont allocate memory to unpack font
-        MEM_pack();
+        // initialization will load font afterward
+        if (!initializing)
+        {
+            // reload default font as its VRAM address has changed
+            VDP_loadDefaultFont(CPU);
+            // re-pack memory as VDP_lontFont allocate memory to unpack font
+            MEM_pack();
+        }
 
         // sprite engine in use ? --> defrag VRAM (this will basically re-allocate all dynamically managed VRAM)
         if (SPR_isInitialized())

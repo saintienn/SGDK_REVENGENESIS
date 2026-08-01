@@ -18,18 +18,32 @@ public class SpriteCell extends Rectangle implements Comparable<SpriteCell>
         BALANCED, MIN_SPRITE, MIN_TILE, NONE
     };
 
-    public static final Comparator<SpriteCell> sizeAndCoverageComparator = new Comparator<SpriteCell>()
+    public static enum OptimizationLevel
+    {
+        FAST, MEDIUM, SLOW, MAX
+    };
+
+    // public static final Comparator<SpriteCell> sizeAndCoverageComparator = new Comparator<SpriteCell>()
+    // {
+    // @Override
+    // public int compare(SpriteCell o1, SpriteCell o2)
+    // {
+    // int result = Integer.compare(o1.numTile, o2.numTile);
+    //
+    // if (result == 0)
+    // result = java.lang.Double.compare(o1.getCoverage(), o2.getCoverage());
+    //
+    // // we want ascending order
+    // return -result;
+    // }
+    // };
+
+    public static final Comparator<SpriteCell> sizeComparator = new Comparator<SpriteCell>()
     {
         @Override
         public int compare(SpriteCell o1, SpriteCell o2)
         {
-            int result = Integer.compare(o1.numTile, o2.numTile);
-
-            if (result == 0)
-                result = java.lang.Double.compare(o1.getCoverage(), o2.getCoverage());
-
-            // we want ascending order
-            return -result;
+            return -Integer.compare(o1.numTile, o2.numTile);
         }
     };
 
@@ -231,7 +245,7 @@ public class SpriteCell extends Rectangle implements Comparable<SpriteCell>
 
     public double getScore()
     {
-        return getBaseScore() + (getCoveragePenalty() / 10d);
+        return getBaseScore(); // + (getCoveragePenalty() / 10d);
     }
 
     public double getBaseScore()
@@ -240,21 +254,20 @@ public class SpriteCell extends Rectangle implements Comparable<SpriteCell>
         {
             default:
             case BALANCED:
-                return 8d + (numTile * 2d) + (getWidth() / 32d);
+                return 8d + (numTile * 2.5d) + (getWidth() / 32d);
 
             case MIN_SPRITE:
-                return 15d + (numTile * 1d) + (getWidth() / 32d);
+                return 12d + (numTile * 1d) + (getWidth() / 32d);
 
             case MIN_TILE:
-                return 5d + (numTile * 5d) + (getWidth() / 32d);
+                return 6d + (numTile * 4d) + (getWidth() / 32d);
         }
+    }
 
-        // return (1 / 10d);
-        // return (numTile / 20d) + (1 / 8d) + ((region.width / 8) / 10d);
-        // return (numTile / 20d) + (1 / 8d);
-        // return (numTile / 20d) + (1 / 50d);
-        // return (numTile / 20d);
-        // return (numTile / 20d) + (1 / 10d);
+    public int getOverdraw(SpriteCell cell)
+    {
+        Rectangle r = intersection(cell);
+        return r.height * r.width;
     }
 
     public double getCoverage()
@@ -265,12 +278,12 @@ public class SpriteCell extends Rectangle implements Comparable<SpriteCell>
         return (double) coveredPix / (double) (numTile * 64);
     }
 
-    public double getCoveragePenalty()
-    {
-        return 1d - getCoverage();
-    }
+    // public double getCoveragePenalty()
+    // {
+    // return 1d - getCoverage();
+    // }
 
-    public boolean optimizeOverdraw(Dimension imageDim, List<SpriteCell> allSpr)
+    public boolean optimizeOverdraw(byte[] image, Dimension imageDim, List<SpriteCell> allSpr)
     {
         final Area area = new Area();
 
@@ -291,47 +304,47 @@ public class SpriteCell extends Rectangle implements Comparable<SpriteCell>
         final Rectangle rectH = new Rectangle(0, 0, width, 1);
         final Rectangle rectV = new Rectangle(0, 0, 1, height);
 
-        while (canMoveLeft(area, x, y, rectH, rectV))
+        while (canMoveLeft(image, imageDim, area, x, y, rectH, rectV))
         {
             x--;
             // outside image bounds ? --> stop
-            if (!bounds.contains(this))
+            if (x < bounds.getMinX())
             {
                 x++;
                 break;
             }
         }
-        while (canMoveRight(area, x, y, rectH, rectV))
+        while (canMoveRight(image, imageDim, area, x, y, rectH, rectV))
         {
             x++;
             // outside image bounds ? --> stop
-            if (!bounds.contains(this))
+            if ((x + width) > bounds.getMaxX())
             {
                 x--;
                 break;
             }
         }
-        while (canMoveTop(area, x, y, rectH, rectV))
+        while (canMoveTop(image, imageDim, area, x, y, rectH, rectV))
         {
             y--;
             // outside image bounds ? --> stop
-            if (!bounds.contains(this))
+            if (y < bounds.getMinY())
             {
                 y++;
                 break;
             }
         }
-        while (canMoveBottom(area, x, y, rectH, rectV))
+        while (canMoveBottom(image, imageDim, area, x, y, rectH, rectV))
         {
             y++;
             // outside image bounds ? --> stop
-            if (!bounds.contains(this))
+            if ((y + height) > bounds.getMaxY())
             {
                 y--;
                 break;
             }
         }
-        
+
         return !getLocation().equals(initialPos);
     }
 
@@ -353,20 +366,16 @@ public class SpriteCell extends Rectangle implements Comparable<SpriteCell>
         Rectangle region = new Rectangle(spr);
 
         // optimize on right
-        while (!ImageUtil.hasOpaquePixelOnEdge(image, imageDim, region, false, false, true, false)
-                && region.intersects(imageBounds))
+        while (!ImageUtil.hasOpaquePixelOnEdge(image, imageDim, region, false, false, true, false) && region.intersects(imageBounds))
             region.x--;
         // optimize on bottom
-        while (!ImageUtil.hasOpaquePixelOnEdge(image, imageDim, region, false, false, false, true)
-                && region.intersects(imageBounds))
+        while (!ImageUtil.hasOpaquePixelOnEdge(image, imageDim, region, false, false, false, true) && region.intersects(imageBounds))
             region.y--;
         // optimize on left
-        while (!ImageUtil.hasOpaquePixelOnEdge(image, imageDim, region, true, false, false, false)
-                && region.intersects(imageBounds))
+        while (!ImageUtil.hasOpaquePixelOnEdge(image, imageDim, region, true, false, false, false) && region.intersects(imageBounds))
             region.x++;
         // optimize on top
-        while (!ImageUtil.hasOpaquePixelOnEdge(image, imageDim, region, false, true, false, false)
-                && region.intersects(imageBounds))
+        while (!ImageUtil.hasOpaquePixelOnEdge(image, imageDim, region, false, true, false, false) && region.intersects(imageBounds))
             region.y++;
 
         return new SpriteCell(region, spr.opt);
@@ -418,69 +427,94 @@ public class SpriteCell extends Rectangle implements Comparable<SpriteCell>
         return new SpriteCell(region, spr.opt);
     }
 
-    private static boolean canMoveTop(Area area, int x, int y, Rectangle rectH, Rectangle rectV)
+    private static boolean canMoveTop(byte[] image, Dimension imageDim, Area area, int x, int y, Rectangle rectH, Rectangle rectV)
     {
         // move rect to bottom
         rectH.setLocation(x, y + (rectV.height - 1));
         // overdraw on bottom line ?
-        if (area.contains(rectH))
+        if (area.intersects(rectH))
         {
-            // move rect to top-1
-            rectH.setLocation(x, y - 1);
-            // nothing on top ?
-            if (!area.intersects(rectH))
-                return true;
+            // get opaque rectangle at bottom
+            Rectangle opaqueRect = ImageUtil.getOpaqueRect(image, imageDim, rectH);
+            // overdraw contains all opaque pixels on bottom line ?
+            if (opaqueRect.isEmpty() || area.contains(opaqueRect))
+            {
+                // move rect to top-1
+                rectH.setLocation(x, y - 1);
+                // nothing on top ?
+                if (!area.intersects(rectH))
+                    return true;
+            }
         }
 
         return false;
     }
 
-    private static boolean canMoveBottom(Area area, int x, int y, Rectangle rectH, Rectangle rectV)
+    private static boolean canMoveBottom(byte[] image, Dimension imageDim, Area area, int x, int y, Rectangle rectH, Rectangle rectV)
     {
         // move rect to top
         rectH.setLocation(x, y);
         // overdraw on top line ?
-        if (area.contains(rectH))
+        if (area.intersects(rectH))
         {
-            // move rect to bottom+1
-            rectH.setLocation(x, y + rectV.height);
-            // nothing on bottom ?
-            if (!area.intersects(rectH))
-                return true;
+            // get opaque rectangle at top
+            Rectangle opaqueRect = ImageUtil.getOpaqueRect(image, imageDim, rectH);
+            // overdraw contains all opaque pixels on top line ?
+            if (opaqueRect.isEmpty() || area.contains(opaqueRect))
+            {
+                // move rect to bottom+1
+                rectH.setLocation(x, y + rectV.height);
+                // nothing on bottom ?
+                if (!area.intersects(rectH))
+                    return true;
+            }
         }
 
         return false;
     }
 
-    private static boolean canMoveLeft(Area area, int x, int y, Rectangle rectH, Rectangle rectV)
+    private static boolean canMoveLeft(byte[] image, Dimension imageDim, Area area, int x, int y, Rectangle rectH, Rectangle rectV)
     {
         // move rect to right
         rectV.setLocation(x + (rectH.width - 1), y);
         // overdraw on right line ?
-        if (area.contains(rectV))
+        if (area.intersects(rectV))
         {
-            // move rect to left-1
-            rectV.setLocation(x - 1, y);
-            // nothing on left ?
-            if (!area.intersects(rectV))
-                return true;
+            // get opaque rectangle at right
+            Rectangle opaqueRect = ImageUtil.getOpaqueRect(image, imageDim, rectV);
+            // overdraw contains all opaque pixels on right line ?
+            if (opaqueRect.isEmpty() || area.contains(opaqueRect))
+            {
+                // move rect to left-1
+                rectV.setLocation(x - 1, y);
+                // nothing on left ?
+                if (!area.intersects(rectV))
+                    return true;
+            }
         }
 
         return false;
     }
 
-    private static boolean canMoveRight(Area area, int x, int y, Rectangle rectH, Rectangle rectV)
+    private static boolean canMoveRight(byte[] image, Dimension imageDim, Area area, int x, int y, Rectangle rectH, Rectangle rectV)
     {
         // move rect to left
         rectV.setLocation(x, y);
         // overdraw on left line ?
-        if (area.contains(rectV))
+        if (area.intersects(rectV))
         {
-            // move rect to right+1
-            rectV.setLocation(x + rectH.width, y);
-            // nothing on right ?
-            if (!area.intersects(rectV))
-                return true;
+            // get opaque rectangle at left
+            Rectangle opaqueRect = ImageUtil.getOpaqueRect(image, imageDim, rectV);
+            // overdraw contains all opaque pixels on left line ?
+            if (opaqueRect.isEmpty() || area.contains(opaqueRect))
+            // if (area.contains(rectV))
+            {
+                // move rect to right+1
+                rectV.setLocation(x + rectH.width, y);
+                // nothing on right ?
+                if (!area.intersects(rectV))
+                    return true;
+            }
         }
 
         return false;

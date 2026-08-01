@@ -12,20 +12,20 @@
  * is not directly used by the application, but by megawifi internally.
  *
  * \author Jesus Alonso (doragasu)
- * \date 2015~2019
+ * \author Juan Antonio (PaCHoN)
+ * \date 2015~2025
  ****************************************************************************/
 #ifndef _MW_MSG_H_
 #define _MW_MSG_H_
 
 #include "types.h"
-
-#if (MODULE_MEGAWIFI != 0)
-
-/// Macro for packing structures and enumerates
-#define PACKED		__attribute__((__packed__))
+#include "sys.h"
 
 /// Maximum buffer length (bytes)
 #define MW_MSG_MAX_BUFLEN	512
+#define MW_MS_TO_FRAMES(ms)	(((ms)*60/500 + 1)/2)
+
+#define MW_BUFLEN 1500
 
 /// Command header length (command code and data length fields).
 #define MW_CMD_HEADLEN		(2 * sizeof(uint16_t))
@@ -122,7 +122,13 @@ enum PACKED mw_security {
 	MW_SEC_WPA_PSK,		///< WPA PSK security
 	MW_SEC_WPA2_PSK,	///< WPA2 PSK security
 	MW_SEC_WPA_WPA2_PSK,	///< WPA or WPA2 security
-	MW_SEC_UNKNOWN		///< Unknown security
+	MW_SEC_WPA2_ENTERPRISE,	///< WPA2 Enterprise security
+	MW_SEC_WPA3_PSK,	///< WPA3 PSK security
+	MW_SEC_WPA2_WPA3_PSK,	///< WPA2 or WPA3 security
+	MW_SEC_WAPI_PSK,	///< WAPI PSK security
+	MW_SEC_OWE,		///< OWE security
+	MW_SEC_UNKNOWN,		///< Unknown security
+	__MW_SEC_MAX
 };
 
 /// WiFi PHY configuration for the connection to the AP
@@ -310,6 +316,23 @@ struct mw_ga_request {
 	char req[];		///< Request data
 };
 
+struct mw_ping_request{
+	uint8_t retries;
+	char domain[64];
+};
+
+struct mw_ping_response{
+	uint32_t transmitted;
+    uint32_t received;
+    uint32_t total_time_ms;
+};
+
+struct mw_upgrade_list_response{
+	uint16_t total;
+	uint16_t len;
+    char *payload;
+};
+
 /// Command sent to system FSM
 typedef union mw_cmd {
 	char packet[MW_CMD_MAX_BUFLEN + 2 * sizeof(uint16_t)];	///< Packet raw data
@@ -334,6 +357,9 @@ typedef union mw_cmd {
 			struct mw_msg_flash_data fl_data;	///< Flash memory data
 			struct mw_msg_flash_range fl_range;	///< Flash memory range
 			struct mw_msg_bind bind;		///< Bind message
+			struct mw_ping_request ping;    ///< Ping message
+			struct mw_ping_response ping_response;    ///< Ping message
+			struct mw_upgrade_list_response ug_list_response;    ///< Ping message
 			union mw_msg_sys_stat sys_stat;		///< System status
 			struct mw_gamertag_set_msg gamertag_set;///< Gamertag set
 			struct mw_gamertag gamertag_get;	///< Gamertag get
@@ -359,8 +385,6 @@ struct mw_reuse_payload {
 	/// Data payload
 	char payload[MW_CMD_MAX_BUFLEN - 4 - 2];
 };
-
-#endif // MODULE_MEGAWIFI
 
 #endif //_MW_MSG_H_
 

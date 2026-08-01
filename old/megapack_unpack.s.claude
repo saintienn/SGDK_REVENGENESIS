@@ -1,0 +1,1447 @@
+//;==============================================================================
+//; megaunp_asm.s  —  Megapack Unpacker para Mega Drive (totalmente em ROM)
+//;
+//; Ponto de entrada C-compatível (SGDK/m68k-elf):
+//;   u32 mp_call_megaunp(const u8 *src, u8 *dst)//;
+//;       4(sp) = src   →  a5 (sourceadr)
+//;       8(sp) = dst   →  a4 (destadr)
+//;   Retorno: d0.l = bytes escritos (tiles_num * 32)
+//;
+//; TODA a memória estática é .rodata (ROM):
+//;   mp_bitcount[256]     — popcount por byte                    256 B
+//;   mp_nth_set_bit[2048] — índice N-th set bit por (byte,n)    2048 B
+//;   mp_minbits_rom[257]  — bits mínimos por range (1..257)      257 B
+//;   mp_addifhi_rom[257]  — limiar high-side por range (1..257)  257 B
+//;   Total ROM estático: 2818 B
+//;
+//; RAM usada em runtime (.bss):
+//;   mp_bitmask[16 words] — ~(1<<col) para exclusão de cor        32 B
+//;   mp_colsets[520 words]— colsets lidos do stream              1040 B
+//;   Total RAM: 1072 B
+//;
+//; mp_build_tables() agora só constrói mp_bitmask (32 B, opcional se
+//; quiser inline no init da ROM bank). mp_minbits/addifhi saíram da RAM.
+//;
+//; Estado de bitstream em registradores (zero overhead de struct):
+//;   d7 = inword   (palavra corrente//; bit 31 já consumido)
+//;   d6 = inbits   (bits válidos restantes em inword)
+//;   a5 = sourceadr
+//;   a4 = destadr
+//;   a3 = mp_nth_set_bit (ROM, fixo)
+//;   a2 = mp_bitmask     (RAM, fixo)
+//;   a1 = rangeadr = mp_minbits_rom+128 (ROM, fixo durante toda a descomp.)
+//;
+//; Frame de variáveis locais (link a6, #-8):
+//;   -2(a6) = chnum      .w  número total de tiles
+//;   -4(a6) = chi        .w  índice do tile corrente
+//;   -6(a6) = colset_cur .w  colset activo
+//;   -8(a6) = vbits      .b  vbits do unpack_sim
+//;==============================================================================
+
+    .text
+    .align 2
+
+//;==============================================================================
+//; MACROS
+//;==============================================================================
+
+
+//;==============================================================================
+//; SEÇÃO .rodata — todas as tabelas em ROM
+//;==============================================================================
+    .section .rodata
+    .align 2
+
+//;------------------------------------------------------------------------------
+//; mp_bitcount[256]  — número de bits 1 em cada byte 0x00..0xFF
+//;------------------------------------------------------------------------------
+    .globl  mp_bitcount
+mp_bitcount:
+    .byte 0,1,1,2,1,2,2,3,1,2,2,3,2,3,3,4  /* 0x00-0x0F */
+    .byte 1,2,2,3,2,3,3,4,2,3,3,4,3,4,4,5  /* 0x10-0x1F */
+    .byte 1,2,2,3,2,3,3,4,2,3,3,4,3,4,4,5  /* 0x20-0x2F */
+    .byte 2,3,3,4,3,4,4,5,3,4,4,5,4,5,5,6  /* 0x30-0x3F */
+    .byte 1,2,2,3,2,3,3,4,2,3,3,4,3,4,4,5  /* 0x40-0x4F */
+    .byte 2,3,3,4,3,4,4,5,3,4,4,5,4,5,5,6  /* 0x50-0x5F */
+    .byte 2,3,3,4,3,4,4,5,3,4,4,5,4,5,5,6  /* 0x60-0x6F */
+    .byte 3,4,4,5,4,5,5,6,4,5,5,6,5,6,6,7  /* 0x70-0x7F */
+    .byte 1,2,2,3,2,3,3,4,2,3,3,4,3,4,4,5  /* 0x80-0x8F */
+    .byte 2,3,3,4,3,4,4,5,3,4,4,5,4,5,5,6  /* 0x90-0x9F */
+    .byte 2,3,3,4,3,4,4,5,3,4,4,5,4,5,5,6  /* 0xA0-0xAF */
+    .byte 3,4,4,5,4,5,5,6,4,5,5,6,5,6,6,7  /* 0xB0-0xBF */
+    .byte 2,3,3,4,3,4,4,5,3,4,4,5,4,5,5,6  /* 0xC0-0xCF */
+    .byte 3,4,4,5,4,5,5,6,4,5,5,6,5,6,6,7  /* 0xD0-0xDF */
+    .byte 3,4,4,5,4,5,5,6,4,5,5,6,5,6,6,7  /* 0xE0-0xEF */
+    .byte 4,5,5,6,5,6,6,7,5,6,6,7,6,7,7,8  /* 0xF0-0xFF */
+
+//;------------------------------------------------------------------------------
+//; mp_nth_set_bit[256*8]  — mp_nth_set_bit[b*8+n] = posição do n-ésimo bit
+//;   setado no byte b (255 = inválido / slot não existente)
+//;------------------------------------------------------------------------------
+    .globl  mp_nth_set_bit
+mp_nth_set_bit:
+    .byte 255,255,255,255,255,255,255,255  /* 0x00 */
+    .byte   0,255,255,255,255,255,255,255  /* 0x01 */
+    .byte   1,255,255,255,255,255,255,255  /* 0x02 */
+    .byte   0,  1,255,255,255,255,255,255  /* 0x03 */
+    .byte   2,255,255,255,255,255,255,255  /* 0x04 */
+    .byte   0,  2,255,255,255,255,255,255  /* 0x05 */
+    .byte   1,  2,255,255,255,255,255,255  /* 0x06 */
+    .byte   0,  1,  2,255,255,255,255,255  /* 0x07 */
+    .byte   3,255,255,255,255,255,255,255  /* 0x08 */
+    .byte   0,  3,255,255,255,255,255,255  /* 0x09 */
+    .byte   1,  3,255,255,255,255,255,255  /* 0x0A */
+    .byte   0,  1,  3,255,255,255,255,255  /* 0x0B */
+    .byte   2,  3,255,255,255,255,255,255  /* 0x0C */
+    .byte   0,  2,  3,255,255,255,255,255  /* 0x0D */
+    .byte   1,  2,  3,255,255,255,255,255  /* 0x0E */
+    .byte   0,  1,  2,  3,255,255,255,255  /* 0x0F */
+    .byte   4,255,255,255,255,255,255,255  /* 0x10 */
+    .byte   0,  4,255,255,255,255,255,255  /* 0x11 */
+    .byte   1,  4,255,255,255,255,255,255  /* 0x12 */
+    .byte   0,  1,  4,255,255,255,255,255  /* 0x13 */
+    .byte   2,  4,255,255,255,255,255,255  /* 0x14 */
+    .byte   0,  2,  4,255,255,255,255,255  /* 0x15 */
+    .byte   1,  2,  4,255,255,255,255,255  /* 0x16 */
+    .byte   0,  1,  2,  4,255,255,255,255  /* 0x17 */
+    .byte   3,  4,255,255,255,255,255,255  /* 0x18 */
+    .byte   0,  3,  4,255,255,255,255,255  /* 0x19 */
+    .byte   1,  3,  4,255,255,255,255,255  /* 0x1A */
+    .byte   0,  1,  3,  4,255,255,255,255  /* 0x1B */
+    .byte   2,  3,  4,255,255,255,255,255  /* 0x1C */
+    .byte   0,  2,  3,  4,255,255,255,255  /* 0x1D */
+    .byte   1,  2,  3,  4,255,255,255,255  /* 0x1E */
+    .byte   0,  1,  2,  3,  4,255,255,255  /* 0x1F */
+    .byte   5,255,255,255,255,255,255,255  /* 0x20 */
+    .byte   0,  5,255,255,255,255,255,255  /* 0x21 */
+    .byte   1,  5,255,255,255,255,255,255  /* 0x22 */
+    .byte   0,  1,  5,255,255,255,255,255  /* 0x23 */
+    .byte   2,  5,255,255,255,255,255,255  /* 0x24 */
+    .byte   0,  2,  5,255,255,255,255,255  /* 0x25 */
+    .byte   1,  2,  5,255,255,255,255,255  /* 0x26 */
+    .byte   0,  1,  2,  5,255,255,255,255  /* 0x27 */
+    .byte   3,  5,255,255,255,255,255,255  /* 0x28 */
+    .byte   0,  3,  5,255,255,255,255,255  /* 0x29 */
+    .byte   1,  3,  5,255,255,255,255,255  /* 0x2A */
+    .byte   0,  1,  3,  5,255,255,255,255  /* 0x2B */
+    .byte   2,  3,  5,255,255,255,255,255  /* 0x2C */
+    .byte   0,  2,  3,  5,255,255,255,255  /* 0x2D */
+    .byte   1,  2,  3,  5,255,255,255,255  /* 0x2E */
+    .byte   0,  1,  2,  3,  5,255,255,255  /* 0x2F */
+    .byte   4,  5,255,255,255,255,255,255  /* 0x30 */
+    .byte   0,  4,  5,255,255,255,255,255  /* 0x31 */
+    .byte   1,  4,  5,255,255,255,255,255  /* 0x32 */
+    .byte   0,  1,  4,  5,255,255,255,255  /* 0x33 */
+    .byte   2,  4,  5,255,255,255,255,255  /* 0x34 */
+    .byte   0,  2,  4,  5,255,255,255,255  /* 0x35 */
+    .byte   1,  2,  4,  5,255,255,255,255  /* 0x36 */
+    .byte   0,  1,  2,  4,  5,255,255,255  /* 0x37 */
+    .byte   3,  4,  5,255,255,255,255,255  /* 0x38 */
+    .byte   0,  3,  4,  5,255,255,255,255  /* 0x39 */
+    .byte   1,  3,  4,  5,255,255,255,255  /* 0x3A */
+    .byte   0,  1,  3,  4,  5,255,255,255  /* 0x3B */
+    .byte   2,  3,  4,  5,255,255,255,255  /* 0x3C */
+    .byte   0,  2,  3,  4,  5,255,255,255  /* 0x3D */
+    .byte   1,  2,  3,  4,  5,255,255,255  /* 0x3E */
+    .byte   0,  1,  2,  3,  4,  5,255,255  /* 0x3F */
+    .byte   6,255,255,255,255,255,255,255  /* 0x40 */
+    .byte   0,  6,255,255,255,255,255,255  /* 0x41 */
+    .byte   1,  6,255,255,255,255,255,255  /* 0x42 */
+    .byte   0,  1,  6,255,255,255,255,255  /* 0x43 */
+    .byte   2,  6,255,255,255,255,255,255  /* 0x44 */
+    .byte   0,  2,  6,255,255,255,255,255  /* 0x45 */
+    .byte   1,  2,  6,255,255,255,255,255  /* 0x46 */
+    .byte   0,  1,  2,  6,255,255,255,255  /* 0x47 */
+    .byte   3,  6,255,255,255,255,255,255  /* 0x48 */
+    .byte   0,  3,  6,255,255,255,255,255  /* 0x49 */
+    .byte   1,  3,  6,255,255,255,255,255  /* 0x4A */
+    .byte   0,  1,  3,  6,255,255,255,255  /* 0x4B */
+    .byte   2,  3,  6,255,255,255,255,255  /* 0x4C */
+    .byte   0,  2,  3,  6,255,255,255,255  /* 0x4D */
+    .byte   1,  2,  3,  6,255,255,255,255  /* 0x4E */
+    .byte   0,  1,  2,  3,  6,255,255,255  /* 0x4F */
+    .byte   4,  6,255,255,255,255,255,255  /* 0x50 */
+    .byte   0,  4,  6,255,255,255,255,255  /* 0x51 */
+    .byte   1,  4,  6,255,255,255,255,255  /* 0x52 */
+    .byte   0,  1,  4,  6,255,255,255,255  /* 0x53 */
+    .byte   2,  4,  6,255,255,255,255,255  /* 0x54 */
+    .byte   0,  2,  4,  6,255,255,255,255  /* 0x55 */
+    .byte   1,  2,  4,  6,255,255,255,255  /* 0x56 */
+    .byte   0,  1,  2,  4,  6,255,255,255  /* 0x57 */
+    .byte   3,  4,  6,255,255,255,255,255  /* 0x58 */
+    .byte   0,  3,  4,  6,255,255,255,255  /* 0x59 */
+    .byte   1,  3,  4,  6,255,255,255,255  /* 0x5A */
+    .byte   0,  1,  3,  4,  6,255,255,255  /* 0x5B */
+    .byte   2,  3,  4,  6,255,255,255,255  /* 0x5C */
+    .byte   0,  2,  3,  4,  6,255,255,255  /* 0x5D */
+    .byte   1,  2,  3,  4,  6,255,255,255  /* 0x5E */
+    .byte   0,  1,  2,  3,  4,  6,255,255  /* 0x5F */
+    .byte   5,  6,255,255,255,255,255,255  /* 0x60 */
+    .byte   0,  5,  6,255,255,255,255,255  /* 0x61 */
+    .byte   1,  5,  6,255,255,255,255,255  /* 0x62 */
+    .byte   0,  1,  5,  6,255,255,255,255  /* 0x63 */
+    .byte   2,  5,  6,255,255,255,255,255  /* 0x64 */
+    .byte   0,  2,  5,  6,255,255,255,255  /* 0x65 */
+    .byte   1,  2,  5,  6,255,255,255,255  /* 0x66 */
+    .byte   0,  1,  2,  5,  6,255,255,255  /* 0x67 */
+    .byte   3,  5,  6,255,255,255,255,255  /* 0x68 */
+    .byte   0,  3,  5,  6,255,255,255,255  /* 0x69 */
+    .byte   1,  3,  5,  6,255,255,255,255  /* 0x6A */
+    .byte   0,  1,  3,  5,  6,255,255,255  /* 0x6B */
+    .byte   2,  3,  5,  6,255,255,255,255  /* 0x6C */
+    .byte   0,  2,  3,  5,  6,255,255,255  /* 0x6D */
+    .byte   1,  2,  3,  5,  6,255,255,255  /* 0x6E */
+    .byte   0,  1,  2,  3,  5,  6,255,255  /* 0x6F */
+    .byte   4,  5,  6,255,255,255,255,255  /* 0x70 */
+    .byte   0,  4,  5,  6,255,255,255,255  /* 0x71 */
+    .byte   1,  4,  5,  6,255,255,255,255  /* 0x72 */
+    .byte   0,  1,  4,  5,  6,255,255,255  /* 0x73 */
+    .byte   2,  4,  5,  6,255,255,255,255  /* 0x74 */
+    .byte   0,  2,  4,  5,  6,255,255,255  /* 0x75 */
+    .byte   1,  2,  4,  5,  6,255,255,255  /* 0x76 */
+    .byte   0,  1,  2,  4,  5,  6,255,255  /* 0x77 */
+    .byte   3,  4,  5,  6,255,255,255,255  /* 0x78 */
+    .byte   0,  3,  4,  5,  6,255,255,255  /* 0x79 */
+    .byte   1,  3,  4,  5,  6,255,255,255  /* 0x7A */
+    .byte   0,  1,  3,  4,  5,  6,255,255  /* 0x7B */
+    .byte   2,  3,  4,  5,  6,255,255,255  /* 0x7C */
+    .byte   0,  2,  3,  4,  5,  6,255,255  /* 0x7D */
+    .byte   1,  2,  3,  4,  5,  6,255,255  /* 0x7E */
+    .byte   0,  1,  2,  3,  4,  5,  6,255  /* 0x7F */
+    .byte   7,255,255,255,255,255,255,255  /* 0x80 */
+    .byte   0,  7,255,255,255,255,255,255  /* 0x81 */
+    .byte   1,  7,255,255,255,255,255,255  /* 0x82 */
+    .byte   0,  1,  7,255,255,255,255,255  /* 0x83 */
+    .byte   2,  7,255,255,255,255,255,255  /* 0x84 */
+    .byte   0,  2,  7,255,255,255,255,255  /* 0x85 */
+    .byte   1,  2,  7,255,255,255,255,255  /* 0x86 */
+    .byte   0,  1,  2,  7,255,255,255,255  /* 0x87 */
+    .byte   3,  7,255,255,255,255,255,255  /* 0x88 */
+    .byte   0,  3,  7,255,255,255,255,255  /* 0x89 */
+    .byte   1,  3,  7,255,255,255,255,255  /* 0x8A */
+    .byte   0,  1,  3,  7,255,255,255,255  /* 0x8B */
+    .byte   2,  3,  7,255,255,255,255,255  /* 0x8C */
+    .byte   0,  2,  3,  7,255,255,255,255  /* 0x8D */
+    .byte   1,  2,  3,  7,255,255,255,255  /* 0x8E */
+    .byte   0,  1,  2,  3,  7,255,255,255  /* 0x8F */
+    .byte   4,  7,255,255,255,255,255,255  /* 0x90 */
+    .byte   0,  4,  7,255,255,255,255,255  /* 0x91 */
+    .byte   1,  4,  7,255,255,255,255,255  /* 0x92 */
+    .byte   0,  1,  4,  7,255,255,255,255  /* 0x93 */
+    .byte   2,  4,  7,255,255,255,255,255  /* 0x94 */
+    .byte   0,  2,  4,  7,255,255,255,255  /* 0x95 */
+    .byte   1,  2,  4,  7,255,255,255,255  /* 0x96 */
+    .byte   0,  1,  2,  4,  7,255,255,255  /* 0x97 */
+    .byte   3,  4,  7,255,255,255,255,255  /* 0x98 */
+    .byte   0,  3,  4,  7,255,255,255,255  /* 0x99 */
+    .byte   1,  3,  4,  7,255,255,255,255  /* 0x9A */
+    .byte   0,  1,  3,  4,  7,255,255,255  /* 0x9B */
+    .byte   2,  3,  4,  7,255,255,255,255  /* 0x9C */
+    .byte   0,  2,  3,  4,  7,255,255,255  /* 0x9D */
+    .byte   1,  2,  3,  4,  7,255,255,255  /* 0x9E */
+    .byte   0,  1,  2,  3,  4,  7,255,255  /* 0x9F */
+    .byte   5,  7,255,255,255,255,255,255  /* 0xA0 */
+    .byte   0,  5,  7,255,255,255,255,255  /* 0xA1 */
+    .byte   1,  5,  7,255,255,255,255,255  /* 0xA2 */
+    .byte   0,  1,  5,  7,255,255,255,255  /* 0xA3 */
+    .byte   2,  5,  7,255,255,255,255,255  /* 0xA4 */
+    .byte   0,  2,  5,  7,255,255,255,255  /* 0xA5 */
+    .byte   1,  2,  5,  7,255,255,255,255  /* 0xA6 */
+    .byte   0,  1,  2,  5,  7,255,255,255  /* 0xA7 */
+    .byte   3,  5,  7,255,255,255,255,255  /* 0xA8 */
+    .byte   0,  3,  5,  7,255,255,255,255  /* 0xA9 */
+    .byte   1,  3,  5,  7,255,255,255,255  /* 0xAA */
+    .byte   0,  1,  3,  5,  7,255,255,255  /* 0xAB */
+    .byte   2,  3,  5,  7,255,255,255,255  /* 0xAC */
+    .byte   0,  2,  3,  5,  7,255,255,255  /* 0xAD */
+    .byte   1,  2,  3,  5,  7,255,255,255  /* 0xAE */
+    .byte   0,  1,  2,  3,  5,  7,255,255  /* 0xAF */
+    .byte   4,  5,  7,255,255,255,255,255  /* 0xB0 */
+    .byte   0,  4,  5,  7,255,255,255,255  /* 0xB1 */
+    .byte   1,  4,  5,  7,255,255,255,255  /* 0xB2 */
+    .byte   0,  1,  4,  5,  7,255,255,255  /* 0xB3 */
+    .byte   2,  4,  5,  7,255,255,255,255  /* 0xB4 */
+    .byte   0,  2,  4,  5,  7,255,255,255  /* 0xB5 */
+    .byte   1,  2,  4,  5,  7,255,255,255  /* 0xB6 */
+    .byte   0,  1,  2,  4,  5,  7,255,255  /* 0xB7 */
+    .byte   3,  4,  5,  7,255,255,255,255  /* 0xB8 */
+    .byte   0,  3,  4,  5,  7,255,255,255  /* 0xB9 */
+    .byte   1,  3,  4,  5,  7,255,255,255  /* 0xBA */
+    .byte   0,  1,  3,  4,  5,  7,255,255  /* 0xBB */
+    .byte   2,  3,  4,  5,  7,255,255,255  /* 0xBC */
+    .byte   0,  2,  3,  4,  5,  7,255,255  /* 0xBD */
+    .byte   1,  2,  3,  4,  5,  7,255,255  /* 0xBE */
+    .byte   0,  1,  2,  3,  4,  5,  7,255  /* 0xBF */
+    .byte   6,  7,255,255,255,255,255,255  /* 0xC0 */
+    .byte   0,  6,  7,255,255,255,255,255  /* 0xC1 */
+    .byte   1,  6,  7,255,255,255,255,255  /* 0xC2 */
+    .byte   0,  1,  6,  7,255,255,255,255  /* 0xC3 */
+    .byte   2,  6,  7,255,255,255,255,255  /* 0xC4 */
+    .byte   0,  2,  6,  7,255,255,255,255  /* 0xC5 */
+    .byte   1,  2,  6,  7,255,255,255,255  /* 0xC6 */
+    .byte   0,  1,  2,  6,  7,255,255,255  /* 0xC7 */
+    .byte   3,  6,  7,255,255,255,255,255  /* 0xC8 */
+    .byte   0,  3,  6,  7,255,255,255,255  /* 0xC9 */
+    .byte   1,  3,  6,  7,255,255,255,255  /* 0xCA */
+    .byte   0,  1,  3,  6,  7,255,255,255  /* 0xCB */
+    .byte   2,  3,  6,  7,255,255,255,255  /* 0xCC */
+    .byte   0,  2,  3,  6,  7,255,255,255  /* 0xCD */
+    .byte   1,  2,  3,  6,  7,255,255,255  /* 0xCE */
+    .byte   0,  1,  2,  3,  6,  7,255,255  /* 0xCF */
+    .byte   4,  6,  7,255,255,255,255,255  /* 0xD0 */
+    .byte   0,  4,  6,  7,255,255,255,255  /* 0xD1 */
+    .byte   1,  4,  6,  7,255,255,255,255  /* 0xD2 */
+    .byte   0,  1,  4,  6,  7,255,255,255  /* 0xD3 */
+    .byte   2,  4,  6,  7,255,255,255,255  /* 0xD4 */
+    .byte   0,  2,  4,  6,  7,255,255,255  /* 0xD5 */
+    .byte   1,  2,  4,  6,  7,255,255,255  /* 0xD6 */
+    .byte   0,  1,  2,  4,  6,  7,255,255  /* 0xD7 */
+    .byte   3,  4,  6,  7,255,255,255,255  /* 0xD8 */
+    .byte   0,  3,  4,  6,  7,255,255,255  /* 0xD9 */
+    .byte   1,  3,  4,  6,  7,255,255,255  /* 0xDA */
+    .byte   0,  1,  3,  4,  6,  7,255,255  /* 0xDB */
+    .byte   2,  3,  4,  6,  7,255,255,255  /* 0xDC */
+    .byte   0,  2,  3,  4,  6,  7,255,255  /* 0xDD */
+    .byte   1,  2,  3,  4,  6,  7,255,255  /* 0xDE */
+    .byte   0,  1,  2,  3,  4,  6,  7,255  /* 0xDF */
+    .byte   5,  6,  7,255,255,255,255,255  /* 0xE0 */
+    .byte   0,  5,  6,  7,255,255,255,255  /* 0xE1 */
+    .byte   1,  5,  6,  7,255,255,255,255  /* 0xE2 */
+    .byte   0,  1,  5,  6,  7,255,255,255  /* 0xE3 */
+    .byte   2,  5,  6,  7,255,255,255,255  /* 0xE4 */
+    .byte   0,  2,  5,  6,  7,255,255,255  /* 0xE5 */
+    .byte   1,  2,  5,  6,  7,255,255,255  /* 0xE6 */
+    .byte   0,  1,  2,  5,  6,  7,255,255  /* 0xE7 */
+    .byte   3,  5,  6,  7,255,255,255,255  /* 0xE8 */
+    .byte   0,  3,  5,  6,  7,255,255,255  /* 0xE9 */
+    .byte   1,  3,  5,  6,  7,255,255,255  /* 0xEA */
+    .byte   0,  1,  3,  5,  6,  7,255,255  /* 0xEB */
+    .byte   2,  3,  5,  6,  7,255,255,255  /* 0xEC */
+    .byte   0,  2,  3,  5,  6,  7,255,255  /* 0xED */
+    .byte   1,  2,  3,  5,  6,  7,255,255  /* 0xEE */
+    .byte   0,  1,  2,  3,  5,  6,  7,255  /* 0xEF */
+    .byte   4,  5,  6,  7,255,255,255,255  /* 0xF0 */
+    .byte   0,  4,  5,  6,  7,255,255,255  /* 0xF1 */
+    .byte   1,  4,  5,  6,  7,255,255,255  /* 0xF2 */
+    .byte   0,  1,  4,  5,  6,  7,255,255  /* 0xF3 */
+    .byte   2,  4,  5,  6,  7,255,255,255  /* 0xF4 */
+    .byte   0,  2,  4,  5,  6,  7,255,255  /* 0xF5 */
+    .byte   1,  2,  4,  5,  6,  7,255,255  /* 0xF6 */
+    .byte   0,  1,  2,  4,  5,  6,  7,255  /* 0xF7 */
+    .byte   3,  4,  5,  6,  7,255,255,255  /* 0xF8 */
+    .byte   0,  3,  4,  5,  6,  7,255,255  /* 0xF9 */
+    .byte   1,  3,  4,  5,  6,  7,255,255  /* 0xFA */
+    .byte   0,  1,  3,  4,  5,  6,  7,255  /* 0xFB */
+    .byte   2,  3,  4,  5,  6,  7,255,255  /* 0xFC */
+    .byte   0,  2,  3,  4,  5,  6,  7,255  /* 0xFD */
+    .byte   1,  2,  3,  4,  5,  6,  7,255  /* 0xFE */
+    .byte   0,  1,  2,  3,  4,  5,  6,  7  /* 0xFF */
+
+//;------------------------------------------------------------------------------
+//; mp_minbits_rom[257]  — bits mínimos para range=1..257
+//; Derivado de: bc = floor(log2(range)) via mp_log2_lut do .c original
+//; Acesso: -128(rangeadr, range.w) com rangeadr = mp_minbits_rom+128
+//;   → endereço = mp_minbits_rom+128-128+range = mp_minbits_rom[range-1] (base 0)
+//; Para range=1: mp_minbits_rom[0]=0 ✓
+//; Para range=257: mp_minbits_rom[256]=8 ✓
+//;------------------------------------------------------------------------------
+    .globl  mp_minbits_rom
+mp_minbits_rom:
+    /* range:  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 */
+    .byte  0, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 4
+    .byte  4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5
+    .byte  5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5
+    .byte  5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 6
+    .byte  6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6
+    .byte  6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6
+    .byte  6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6
+    .byte  6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 7
+    .byte  7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7
+    .byte  7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7
+    .byte  7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7
+    .byte  7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7
+    .byte  7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7
+    .byte  7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7
+    .byte  7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7
+    .byte  7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 8
+    .byte  8  /* range=257 */
+
+//;------------------------------------------------------------------------------
+//; mp_addifhi_rom[257]  — limiar high-side para range=1..257
+//; addifhi[range] = (1 << (bc+1)) - range - 1   (= unused - 1)
+//; Se getbits(bc) > addifhi → precisa de 1 bit extra
+//; Acesso: 127(rangeadr, range.w) com rangeadr = mp_minbits_rom+128
+//;   → endereço = mp_minbits_rom+128+127+range = mp_addifhi_rom[range-1] (base 0)
+//;   Exige que mp_addifhi_rom esteja exatamente 255 bytes após mp_minbits_rom.
+//;   Para isso: mp_minbits_rom tem 257 bytes (alinhado em .align 1 implícito),
+//;   mais 255-257 = -2 bytes de gap → não funciona diretamente.
+//;
+//;   SOLUÇÃO: colocar mp_addifhi_rom logo após mp_minbits_rom e usar
+//;   rangeadr = mp_minbits_rom+128, addifhi_offset = 127+257 = 384.
+//;   Porém 384 > 127 (não cabe em offset de 1 byte).
+//;
+//;   ALTERNATIVA (usada aqui): registrador separado para addifhi.
+//;   a1 = rangeadr para minbits (mp_minbits_rom+128, offset -128..+128)
+//;   O acesso a addifhi usa a0 = mp_addifhi_rom+128 com offset -128 também.
+//;   a0 é livre durante getstream/getbits (só usado como otheradr em unpack_sim,
+//;   mas getstream é chamado ANTES de usar a0 lá, então é seguro).
+//;   → REGISTRADOR a0 = addifhi_radr = mp_addifhi_rom+128 (fixo durante descomp.)
+//;------------------------------------------------------------------------------
+    .globl  mp_addifhi_rom
+mp_addifhi_rom:
+    /* range:   1   2   3   4   5   6   7   8   9  10  11  12  13  14  15  16 */
+    .byte   0,  1,  0,  3,  2,  1,  0,  7,  6,  5,  4,  3,  2,  1,  0, 15
+    .byte  14, 13, 12, 11, 10,  9,  8,  7,  6,  5,  4,  3,  2,  1,  0, 31
+    .byte  30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15
+    .byte  14, 13, 12, 11, 10,  9,  8,  7,  6,  5,  4,  3,  2,  1,  0, 63
+    .byte  62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47
+    .byte  46, 45, 44, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31
+    .byte  30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15
+    .byte  14, 13, 12, 11, 10,  9,  8,  7,  6,  5,  4,  3,  2,  1,  0,127
+    .byte 126,125,124,123,122,121,120,119,118,117,116,115,114,113,112,111
+    .byte 110,109,108,107,106,105,104,103,102,101,100, 99, 98, 97, 96, 95
+    .byte  94, 93, 92, 91, 90, 89, 88, 87, 86, 85, 84, 83, 82, 81, 80, 79
+    .byte  78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63
+    .byte  62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47
+    .byte  46, 45, 44, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31
+    .byte  30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15
+    .byte  14, 13, 12, 11, 10,  9,  8,  7,  6,  5,  4,  3,  2,  1,  0,255
+    .byte 254  /* range=257 */
+
+//;==============================================================================
+//; SEÇÃO .bss — única RAM usada em runtime
+//;==============================================================================
+    .bss
+    .align 2
+
+    .globl  mp_bitmask
+mp_bitmask:     .space  32      /* 16 words: ~(1<<col) para exclusão de cor */
+
+    .globl  mp_colsets
+mp_colsets:     .space  1040    /* 520 words: max 512+4 colsets por stream */
+
+//;==============================================================================
+
+//;==============================================================================
+//; SEÇÃO .text — código
+//;==============================================================================
+    .text
+    .align 2
+//;==============================================================================
+//; Bitstream — tradução direta do C mp_read_bits
+//;
+//; Estado em registradores (mapeamento 1:1 com mp_bs_t):
+//;   d7.l = cmp    — bits válidos em 31..32-used (MSB first), como no C
+//;   d6.b = used   — número de bits válidos em cmp (0..16)
+//;   a5   = src    — ponteiro para próximo byte a ler
+//;
+//; Convenção de resultado: retorna em d7.w (bits 15..0)
+//; n_bits passado em d0.b
+//;==============================================================================
+
+//;------------------------------------------------------------------------------
+//; mp_getbits — lê d0.b bits//; resultado em d7.w
+//; Tradução de mp_read_bits(s, num_bits)
+//;------------------------------------------------------------------------------
+mp_getbits:
+    /* if (used == 0) reload */
+    tst.b   %d6
+    bne     .gb_noload
+    move.b  (%a5)+,%d7
+    lsl.l   #8,%d7
+    move.b  (%a5)+,%d7        /* cmp = src[0]<<24 | src[1]<<16 — mas carregamos bytes */
+    /* Recarregar: cmp = (src[0]<<24)|(src[1]<<16) */
+    /* Mais eficiente: move.w (%a5)+,%d7//; swap %d7//; clr.w %d7 */
+    /* Refazendo de forma correta: */
+    subq.l  #2,%a5            /* desfaz os 2 incrementos acima */
+    move.w  (%a5)+,%d7        /* d7.w = src[0..1] big-endian */
+    swap    %d7               /* d7: word_alta=src_word, word_baixa=lixo_anterior */
+    clr.w   %d7               /* d7: word_alta=src_word, word_baixa=0 */
+    /* Agora d7.l = src_word << 16 = (src[0]<<24)|(src[1]<<16) ✓ */
+    moveq   #16,%d6
+.gb_noload:
+    /* caso comum: num_bits <= used */
+    cmp.b   %d6,%d0
+    bhi     .gb_rare
+    /* result = cmp >> (32 - num_bits) = swap(cmp) >> (16 - num_bits) */
+    move.l  %d7,%d1
+    swap    %d1               /* d1.w = cmp bits 31..16 */
+    moveq   #16,%d2
+    sub.b   %d0,%d2           /* d2 = 16 - num_bits */
+    lsr.w   %d2,%d1           /* d1.w = result */
+    lsl.l   %d0,%d7           /* cmp <<= num_bits */
+    sub.b   %d0,%d6           /* used -= num_bits */
+    move.w  %d1,%d7           /* d7.w = result */
+    rts
+
+.gb_rare:
+    /* caso raro: num_bits > used — dois pedaços */
+    /* hi = cmp >> (32-used) */
+    move.l  %d7,%d1
+    swap    %d1
+    moveq   #16,%d2
+    sub.b   %d6,%d2
+    lsr.w   %d2,%d1           /* d1.w = hi */
+    /* num_bits -= first (used) */
+    sub.b   %d6,%d0           /* d0 = num_bits - first */
+    /* carrega nova palavra */
+    move.w  (%a5)+,%d7
+    swap    %d7
+    clr.w   %d7               /* novo cmp */
+    /* lo = novo_cmp >> (32 - num_bits restantes) */
+    move.l  %d7,%d2
+    swap    %d2
+    moveq   #16,%d3
+    sub.b   %d0,%d3
+    lsr.w   %d3,%d2           /* d2.w = lo */
+    /* result = (hi << num_bits_restantes) | lo */
+    lsl.w   %d0,%d1
+    or.w    %d2,%d1
+    /* cmp <<= num_bits_restantes//; used = 16 - num_bits_restantes */
+    lsl.l   %d0,%d7
+    moveq   #16,%d6
+    sub.b   %d0,%d6
+    move.w  %d1,%d7           /* d7.w = result */
+    rts
+
+//;------------------------------------------------------------------------------
+//; mp_get1bit — lê 1 bit//; resultado no carry
+//; Tradução de mp_read_bits(s, 1) com resultado no carry
+//;------------------------------------------------------------------------------
+mp_get1bit:
+    tst.b   %d6
+    bne     .g1_noload
+    move.w  (%a5)+,%d7
+    swap    %d7
+    clr.w   %d7
+    moveq   #16,%d6
+.g1_noload:
+    /* result = bit 31 de cmp */
+    add.l   %d7,%d7           /* shift left: bit31 → carry, cmp <<= 1 */
+    subq.b  #1,%d6            /* used-- */
+    rts                       /* resultado no carry */
+
+//;------------------------------------------------------------------------------
+//; Macro getqbit — lê 1 bit no carry (versão inline para loops críticos)
+//;------------------------------------------------------------------------------
+    .macro  getqbit
+    tst.b   %d6
+    bne     1f
+    move.w  (%a5)+,%d7
+    swap    %d7
+    clr.w   %d7
+    moveq   #16,%d6
+1:  add.l   %d7,%d7
+    subq.b  #1,%d6
+    .endm
+
+//;==============================================================================
+//; mp_getstream — tradução de mp_get_stream(s, range)
+//;   range em d1.w//; resultado em d7.w
+//;   Usa d0,d1,d2,d3 como scratch
+//;==============================================================================
+mp_getbigstream:                /* alias — redireciona para mp_getstream */
+mp_getstream:
+    cmp.w   #256,%d1
+    bhi     .gs_big
+
+    /* range <= 256: caso direto */
+    /* bc = mp_log2_lut[range] */
+    moveq   #0,%d2
+    move.b  -1(%a1,%d1.w),%d2               /* mp_minbits_rom[range] = floor(log2(range)) */
+    /* unused = (1 << (bc+1)) - range */
+    moveq   #1,%d0
+    add.b   %d2,%d0             /* bc+1 */
+    moveq   #1,%d3
+    lsl.l   %d0,%d3             /* 1 << (bc+1) */
+    sub.w   %d1,%d3             /* unused = (1<<(bc+1)) - range */
+    /* x = read_bits(bc) */
+    move.b  %d2,%d0
+    bsr     mp_getbits
+    /* if (x < unused) return x */
+    cmp.w   %d3,%d7
+    blo     .gs_ret
+    /* else return ((x<<1)|read_bits(1)) - unused */
+    lsl.w   #1,%d7
+    move.w  %d7,%d2             /* salva x<<1 */
+    moveq   #1,%d0
+    bsr     mp_getbits
+    or.w    %d2,%d7             /* (x<<1)|bit */
+    sub.w   %d3,%d7             /* - unused */
+.gs_ret:
+    rts
+
+.gs_big:
+    /* range > 256: range--//; low=(range&0xFF)+1//; hi=(range>>8)+1 */
+    subq.w  #1,%d1
+    move.w  %d1,%d2
+    and.w   #0x00FF,%d2
+    addq.w  #1,%d2              /* low */
+    lsr.w   #8,%d1
+    addq.w  #1,%d1              /* hi */
+    bsr     mp_getstream        /* xhi = getstream(hi) */
+    tst.w   %d7
+    beq     .gs_big_low
+    /* xhi > 0: return read_bits(8) + (xhi-1)*256 + low */
+    subq.w  #1,%d7
+    lsl.w   #8,%d7
+    add.w   %d2,%d7             /* + low */
+    move.w  %d7,-(%a7)          /* save */
+    moveq   #8,%d0
+    bsr     mp_getbits
+    add.w   (%a7)+,%d7
+    rts
+.gs_big_low:
+    /* xhi == 0: getstream(low) */
+    move.w  %d2,%d1
+    bra     mp_getstream
+
+//;==============================================================================
+//; mp_pxstr_d5 — pixstream com colset em d5.w → resultado em d7.w
+//; Tradução de mp_pixstream(s, col_set)
+//; Usa d0,d1,d2,d3,d4. Preserva d5.
+//;==============================================================================
+mp_pxstr_d5:
+    /* lo = col_set & 0xFF//; hi = col_set >> 8 */
+    /* loc = bitcount[lo]//; n = loc + bitcount[hi] */
+    move.l  %a0,-(%a7)          /* salva a0 (tile/ref ptr) */
+    movea.l #mp_bitcount,%a0
+
+    moveq   #0,%d2
+    move.b  %d5,%d2
+    move.b  (%a0,%d2.w),%d2     /* loc = bitcount[lo] */
+
+    moveq   #0,%d3
+    move.w  %d5,%d3
+    lsr.w   #8,%d3
+    move.b  (%a0,%d3.w),%d3
+    add.b   %d3,%d2             /* n = loc + bitcount[hi] */
+    ext.w   %d2                 /* d2.w = n */
+
+    /* idx = getstream(n) */
+    move.w  %d2,%d1
+    move.l  (%a7)+,%a0          /* restaura a0 */
+    move.w  %d5,-(%a7)          /* salva col_set */
+    move.w  %d2,-(%a7)          /* salva loc (word) */
+    bsr     mp_getstream        /* d7.w = idx */
+    move.w  (%a7)+,%d2          /* restore loc */
+    move.w  (%a7)+,%d5          /* restore col_set */
+
+    /* if (idx < loc) return nth_set_bit[lo*8 + idx] */
+    cmp.w   %d2,%d7
+    bhs     .px_hi
+    moveq   #0,%d1
+    move.b  %d5,%d1
+    lsl.w   #3,%d1              /* lo*8 */
+    add.w   %d7,%d1             /* lo*8 + idx */
+    moveq   #0,%d7
+    move.b  (%a3,%d1.w),%d7
+    rts
+.px_hi:
+    /* return nth_set_bit[hi*8 + (idx-loc)] + 8 */
+    sub.w   %d2,%d7             /* idx - loc */
+    moveq   #0,%d1
+    move.w  %d5,%d1
+    lsr.w   #8,%d1              /* hi */
+    lsl.w   #3,%d1              /* hi*8 */
+    add.w   %d7,%d1
+    moveq   #0,%d7
+    move.b  (%a3,%d1.w),%d7
+    addq.w  #8,%d7
+    rts
+
+//;==============================================================================
+//; Macros de pixel 4bpp (get/set)
+//; get_pix_m base_an, col_dw, row_dw → d0.b  (suja d0,d1)
+//; set_pix_m base_an, col_dw, row_dw, pix_db (suja d1,d2)
+//;==============================================================================
+    .macro  get_pix_m  base, col, row
+    move.w  \row,%d0
+    asl.w   #2,%d0
+    move.w  \col,%d1
+    lsr.w   #1,%d1
+    add.w   %d1,%d0
+    move.b  (\base,%d0.w),%d0
+    move.w  \col,%d1
+    btst    #0,%d1
+    beq     .gpm_hi_\@
+    and.b   #0x0F,%d0
+    bra     .gpm_dn_\@
+.gpm_hi_\@:
+    lsr.b   #4,%d0
+.gpm_dn_\@:
+    .endm
+
+    .macro  set_pix_m  base, col, row, pix
+    move.w  \row,%d1
+    asl.w   #2,%d1
+    move.w  \col,%d2
+    lsr.w   #1,%d2
+    add.w   %d2,%d1
+    move.w  \col,%d2
+    btst    #0,%d2
+    beq     .spm_hi_\@
+    and.b   #0xF0,(\base,%d1.w)
+    move.b  \pix,%d2
+    and.b   #0x0F,%d2
+    or.b    %d2,(\base,%d1.w)
+    bra     .spm_dn_\@
+.spm_hi_\@:
+    and.b   #0x0F,(\base,%d1.w)
+    move.b  \pix,%d2
+    lsl.b   #4,%d2
+    or.b    %d2,(\base,%d1.w)
+.spm_dn_\@:
+    .endm
+
+//;==============================================================================
+//; unpack_sim — tradução de mp_unpack_sim(s, dst, i, pixels, offset)
+//;   -4(a6) = chi (i)
+//;   -6(a6) = pixels
+//;   a4     = dst (base — tile_i = a4 + i*32, mas a4 já posicionado = tile_i)
+//;   a2     = tile base (tile_i), preservado
+//; offset calculado internamente: off = (~getstream(i)) + i
+//;==============================================================================
+unpack_sim:
+    /* offset = (~getstream(s,i)) + i */
+    move.w  -4(%a6),%d1
+    bsr     mp_getstream
+    not.l   %d7
+    moveq   #0,%d0
+    move.w  -4(%a6),%d0
+    add.l   %d0,%d7             /* d7 = offset = ~result + i (32-bit) */
+    /* tile_ref = dst_base + offset*32 */
+    /* dst_base = a4 - i*32 */
+    move.l  %a4,%a2             /* a2 = tile_i */
+    move.l  %a4,%a0
+    sub.l   %d0,%d7             /* offset - i */
+    asl.l   #5,%d7
+    add.l   %d7,%a0             /* a0 = tile_ref */
+    move.l  %a0,-(%a7)          /* push tile_ref */
+
+    /* vmap */
+    moveq   #0,%d3
+    bsr     mp_get1bit
+    bcc     .sv_vh0
+    moveq   #15,%d1
+    bsr     mp_getstream
+    eor.b   #0x0F,%d7
+    lsl.b   #4,%d7
+    move.b  %d7,%d3
+.sv_vh0:
+    bsr     mp_get1bit
+    bcc     .sv_vl0
+    or.b    #0x0F,%d3
+    moveq   #15,%d1
+    bsr     mp_getstream
+    eor.b   %d7,%d3
+.sv_vl0:
+
+    /* hmap */
+    moveq   #0,%d4
+    bsr     mp_get1bit
+    bcc     .sv_hh0
+    moveq   #15,%d1
+    bsr     mp_getstream
+    eor.b   #0x0F,%d7
+    lsl.b   #4,%d7
+    move.b  %d7,%d4
+.sv_hh0:
+    bsr     mp_get1bit
+    bcc     .sv_hl0
+    or.b    #0x0F,%d4
+    moveq   #15,%d1
+    bsr     mp_getstream
+    eor.b   %d7,%d4
+.sv_hl0:
+
+    /* fast path: hmap==FF && vmap==FF */
+    cmp.b   #0xFF,%d4
+    bne     .sv_nofull
+    cmp.b   #0xFF,%d3
+    bne     .sv_nofull
+    move.l  (%a7),%a0
+    move.l  (%a0)+,(%a2)+
+    move.l  (%a0)+,(%a2)+
+    move.l  (%a0)+,(%a2)+
+    move.l  (%a0)+,(%a2)+
+    move.l  (%a0)+,(%a2)+
+    move.l  (%a0)+,(%a2)+
+    move.l  (%a0)+,(%a2)+
+    move.l  (%a0)+,(%a2)+
+    addq.l  #4,%a7
+    /* a4 deve avançar 32 bytes */
+    add.l   #32,%a4
+    rts
+
+.sv_nofull:
+    /* push hmap, vmap, row=0 */
+    move.w  %d4,-(%a7)          /* hmap  @ 4(a7) */
+    move.w  %d3,-(%a7)          /* vmap  @ 2(a7) */
+    clr.w   -(%a7)              /* row=0 @ 0(a7) */
+    /* (a7)=row 2(a7)=vmap 4(a7)=hmap 6(a7)=tile_ref */
+
+.sv_rowloop:
+    move.w  (%a7),%d0           /* row */
+    moveq   #7,%d1
+    sub.w   %d0,%d1             /* y = 7-row */
+
+    /* ref_row = tile_ref + row*4 */
+    move.l  6(%a7),%a0
+    move.w  (%a7),%d0
+    asl.w   #2,%d0
+    add.w   %d0,%a0             /* a0 = ref_row */
+
+    /* dst_row = tile_i + row*4 = a2 + row*4 */
+    /* a4 avança automaticamente via (%a4)+ no byteloop */
+    /* mas aqui usamos a4 como ponteiro sequencial já posicionado na linha certa */
+
+    /* hmap & (1<<y)? */
+    moveq   #1,%d0
+    lsl.w   %d1,%d0
+    and.b   4(%a7),%d0
+    beq     .sv_row_proc
+    move.l  (%a0),(%a4)
+    addq.l  #4,%a4
+    bra     .sv_row_next
+
+.sv_row_proc:
+    cmp.b   #0xFF,2(%a7)
+    bne     .sv_do_pix
+    move.l  (%a0),(%a4)
+    addq.l  #4,%a4
+    bra     .sv_row_next
+
+.sv_do_pix:
+    /* vmaptmp = vmap */
+    move.b  2(%a7),-8(%a6)
+
+    /* lê bits extras se hmap|(1<<y) != FF */
+    move.w  (%a7),%d0
+    moveq   #7,%d1
+    sub.w   %d0,%d1
+    moveq   #1,%d0
+    lsl.w   %d1,%d0
+    or.b    4(%a7),%d0
+    cmp.b   #0xFF,%d0
+    beq     .sv_novlb
+
+    moveq   #7,%d2
+.sv_vlb:
+    /* break se vmaptmp tem só 1 bit zero */
+    move.b  -8(%a6),%d0
+    not.b   %d0
+    move.b  %d0,%d1
+    subq.b  #1,%d1
+    and.b   %d0,%d1
+    beq     .sv_novlb
+    /* vmap&(1<<x)==0 → lê 1 bit */
+    moveq   #1,%d0
+    lsl.b   %d2,%d0
+    and.b   2(%a7),%d0
+    bne     .sv_vlb_skip
+    bsr     mp_get1bit          /* resultado no carry */
+    bcc     .sv_vlb_skip
+    moveq   #1,%d0
+    lsl.b   %d2,%d0
+    or.b    %d0,-8(%a6)
+.sv_vlb_skip:
+    dbra    %d2,.sv_vlb
+
+.sv_novlb:
+    /* 4 bytes: b=0..3, xe=7-2b(mask 0x80,0x20,0x08,0x02), xo=6-2b(0x40,0x10,0x04,0x01) */
+    moveq   #0,%d2
+.sv_byteloop:
+    moveq   #0,%d3
+    move.b  (%a0,%d2.w),%d3     /* ref[b] */
+
+    /* pe: bit xe de vmaptmp */
+    moveq   #7,%d0
+    move.w  %d2,%d1
+    add.w   %d1,%d1
+    sub.w   %d1,%d0             /* xe = 7-2b */
+    moveq   #1,%d1
+    lsl.b   %d0,%d1
+    and.b   -8(%a6),%d1
+    bne     .sv_pe_copy
+    moveq   #0,%d1
+    move.b  %d3,%d1
+    lsr.b   #4,%d1              /* re */
+    move.w  -6(%a6),%d5         /* pixels */
+    moveq   #1,%d0
+    lsl.w   %d1,%d0
+    not.w   %d0
+    and.w   %d0,%d5
+    move.w  %d2,-(%a7)
+    move.w  %d3,-(%a7)
+    bsr     mp_pxstr_d5
+    move.w  (%a7)+,%d3
+    move.w  (%a7)+,%d2
+    move.b  %d7,%d4
+    bra     .sv_pe_done
+.sv_pe_copy:
+    move.b  %d3,%d4
+    lsr.b   #4,%d4
+
+.sv_pe_done:
+    /* po: bit xo de vmaptmp */
+    moveq   #6,%d0
+    move.w  %d2,%d1
+    add.w   %d1,%d1
+    sub.w   %d1,%d0             /* xo = 6-2b */
+    moveq   #1,%d1
+    lsl.b   %d0,%d1
+    and.b   -8(%a6),%d1
+    bne     .sv_po_copy
+    moveq   #0,%d1
+    move.b  %d3,%d1
+    and.b   #0x0F,%d1           /* ro */
+    move.w  -6(%a6),%d5
+    moveq   #1,%d0
+    lsl.w   %d1,%d0
+    not.w   %d0
+    and.w   %d0,%d5
+    move.w  %d2,-(%a7)
+    move.w  %d4,-(%a7)
+    bsr     mp_pxstr_d5
+    move.w  (%a7)+,%d4
+    move.w  (%a7)+,%d2
+    move.b  %d7,%d3
+    bra     .sv_po_done
+.sv_po_copy:
+    move.b  %d3,%d3
+    and.b   #0x0F,%d3
+
+.sv_po_done:
+    lsl.b   #4,%d4
+    or.b    %d3,%d4
+    move.b  %d4,(%a4)+
+
+    addq.w  #1,%d2
+    cmp.w   #4,%d2
+    bne     .sv_byteloop
+
+.sv_row_next:
+    addq.w  #1,(%a7)
+    cmp.w   #8,(%a7)
+    bne     .sv_rowloop
+
+    addq.l  #6,%a7              /* pop row+vmap+hmap */
+    addq.l  #4,%a7              /* pop tile_ref */
+    rts
+
+//;==============================================================================
+//; unpack_linerep — tradução de mp_unpack_linerep(s,dst,i,pixels,col_idx)
+//;   -4(a6) = chi (i)
+//;   -6(a6) = pixels (= mp_colsets[idx])
+//;   a4     = tile_i = dst + i*32 (já posicionado)
+//;   a2     = tile base (= a4 ao entrar)
+//;
+//; Stack:
+//;   (a7)   = vpref.w
+//;   2(a7)  = vmap.w
+//;   4(a7)  = hmap.w
+//;   6(a7)  = base_pixels.w
+//;   8(a7)  = tile_ptr.l
+//;==============================================================================
+unpack_linerep:
+    move.l  %a4,-(%a7)          /* tile_ptr */
+    move.l  %a4,%a2             /* a2 = tile base */
+
+    /* hmap */
+    moveq   #0,%d4
+    bsr     mp_get1bit
+    bcc     .lr_hh0
+    moveq   #15,%d1
+    bsr     mp_getstream
+    eor.b   #0x0F,%d7
+    lsl.b   #3,%d7
+    move.b  %d7,%d4
+.lr_hh0:
+    bsr     mp_get1bit
+    bcc     .lr_hl0
+    or.b    #7,%d4
+    moveq   #7,%d1
+    bsr     mp_getstream
+    eor.b   %d7,%d4
+.lr_hl0:
+    btst    #3,%d4
+    beq     .lr_hni
+    eor.b   #7,%d4
+.lr_hni:
+
+    /* vmap */
+    moveq   #0,%d3
+    bsr     mp_get1bit
+    bcc     .lr_vh0
+    moveq   #15,%d1
+    bsr     mp_getstream
+    eor.b   #0x0F,%d7
+    lsl.b   #3,%d7
+    move.b  %d7,%d3
+.lr_vh0:
+    bsr     mp_get1bit
+    bcc     .lr_vl0
+    or.b    #7,%d3
+    moveq   #7,%d1
+    bsr     mp_getstream
+    eor.b   %d7,%d3
+.lr_vl0:
+    btst    #3,%d3
+    beq     .lr_vni
+    eor.b   #7,%d3
+.lr_vni:
+
+    /* push: base_pixels, hmap, vmap, vpref=1 */
+    move.w  -6(%a6),-(%a7)      /* base_pixels */
+    move.w  %d4,-(%a7)          /* hmap */
+    move.w  %d3,-(%a7)          /* vmap */
+    move.w  #1,-(%a7)           /* vpref */
+    /* (a7)=vpref 2(a7)=vmap 4(a7)=hmap 6(a7)=base_pixels 8(a7)=tile_ptr */
+
+    /* col=0, row=0: pixstream livre com pixels */
+    move.w  -6(%a6),%d5
+    bsr     mp_pxstr_d5
+    set_pix_m %a2, #0, #0, %d7
+
+    /* cols 1..7 (x=6..0, col=7-x) */
+    moveq   #6,%d2
+.lr_r0x:
+    moveq   #7,%d3
+    sub.w   %d2,%d3             /* col = 7-x */
+
+    /* vmap & (1<<x)? */
+    moveq   #1,%d0
+    lsl.b   %d2,%d0
+    and.b   2(%a7),%d0
+    bne     .lr_r0_vmap
+
+    bsr     mp_get1bit
+    bcc     .lr_r0_copy_left
+
+    /* bit=1: mpixstream(get_pixel(col-1,0), pixels) */
+    move.w  %d3,%d4
+    subq.w  #1,%d4
+    get_pix_m %a2, %d4, #0
+    /* d0.b = pix_left */
+    move.w  -6(%a6),%d5
+    moveq   #1,%d1
+    moveq   #0,%d4
+    move.b  %d0,%d4
+    lsl.w   %d4,%d1
+    not.w   %d1
+    and.w   %d1,%d5
+    move.w  %d2,-(%a7)
+    move.w  %d3,-(%a7)
+    bsr     mp_pxstr_d5
+    move.w  (%a7)+,%d3
+    move.w  (%a7)+,%d2
+    move.b  %d7,%d0
+    bra     .lr_r0_set
+
+.lr_r0_vmap:
+.lr_r0_copy_left:
+    move.w  %d3,%d4
+    subq.w  #1,%d4
+    get_pix_m %a2, %d4, #0
+    /* d0 = pix → d7 = ? Precisamos d7 para set_pix_m que usa pix. Usar d0 diretamente */
+
+.lr_r0_set:
+    /* d0 = pixel (de pxstr: resultado em d7//; de copy: resultado em d0) */
+    /* normalizar: set_pix_m usa \pix que pode ser d0 ou d7 */
+    /* Para pxstr: d7.w=result//; para copy: d0.b=result */
+    /* Usar d0 uniformemente: copiar d7 para d0 quando vier do stream */
+    set_pix_m %a2, %d3, #0, %d0
+    dbra    %d2,.lr_r0x
+
+    /* linhas 1..7 (y=6..0, row=7-y) */
+    moveq   #6,%d2              /* y */
+.lr_yloop:
+    moveq   #7,%d1
+    sub.w   %d2,%d1             /* row = 7-y */
+
+    /* hmap & (1<<y)? */
+    moveq   #1,%d0
+    lsl.b   %d2,%d0
+    and.b   4(%a7),%d0
+    beq     .lr_row_proc
+    move.w  %d1,%d0
+    asl.w   #2,%d0
+    move.w  %d0,%d3
+    subq.w  #4,%d3
+    move.l  (%a2,%d3.w),(%a2,%d0.w)
+    bra     .lr_y_next
+
+.lr_row_proc:
+    /* pixels = base_pixels */
+    move.w  6(%a7),-6(%a6)
+
+    /* col=0: get_pixel(0,row-1), read_bit */
+    move.w  %d1,%d3
+    subq.w  #1,%d3
+    get_pix_m %a2, #0, %d3
+    move.b  %d0,%d4             /* pix_above */
+    bsr     mp_get1bit
+    bcc     .lr_c0_copy
+    move.w  -6(%a6),%d5
+    moveq   #1,%d0
+    moveq   #0,%d3
+    move.b  %d4,%d3
+    lsl.w   %d3,%d0
+    not.w   %d0
+    and.w   %d0,%d5
+    move.w  %d2,-(%a7)
+    move.w  %d1,-(%a7)
+    bsr     mp_pxstr_d5
+    move.w  (%a7)+,%d1
+    move.w  (%a7)+,%d2
+    move.b  %d7,%d0
+    bra     .lr_c0_set
+.lr_c0_copy:
+    move.b  %d4,%d0
+.lr_c0_set:
+    set_pix_m %a2, #0, %d1, %d0
+
+    /* cols 1..7 */
+    moveq   #6,%d3
+.lr_xloop:
+    moveq   #7,%d4
+    sub.w   %d3,%d4             /* col */
+
+    /* vmap & (1<<x)? */
+    moveq   #1,%d0
+    lsl.b   %d3,%d0
+    and.b   2(%a7),%d0
+    bne     .lr_x_vmap
+
+    tst.w   (%a7)
+    beq     .lr_x_pref0
+
+    /* vpref=1 */
+    bsr     mp_get1bit
+    bcc     .lr_vp1_left
+
+    move.w  %d1,-(%a7)          /* save row */
+    move.w  %d4,%d5
+    subq.w  #1,%d5
+    get_pix_m %a2, %d5, %d1    /* pixa = get_pixel(col-1,row) — d1 destroyed */
+    move.b  %d0,%d5             /* pixa */
+    move.w  (%a7),%d0           /* row (saved) */
+    subq.w  #1,%d0              /* row-1 */
+    get_pix_m %a2, %d4, %d0    /* pixb = get_pixel(col,row-1) */
+    move.b  %d0,%d0             /* pixb in d0 */
+    move.w  (%a7)+,%d1          /* restore row */
+
+    cmp.b   %d5,%d0
+    bne     .lr_vp1_neq
+    /* pixa==pixb: mpixstream(pixa, base_pixels) */
+    move.w  6(%a7),-6(%a6)
+    move.w  -6(%a6),%d0         /* pixels */
+    moveq   #1,%d1
+    moveq   #0,%d2
+    move.b  %d5,%d2
+    lsl.w   %d2,%d1
+    not.w   %d1
+    and.w   %d1,%d0
+    move.w  %d0,%d5             /* colset preparado */
+    move.w  %d3,-(%a7)
+    move.w  %d1,-(%a7)
+    bsr     mp_pxstr_d5
+    move.w  (%a7)+,%d1
+    move.w  (%a7)+,%d3
+    moveq   #7,%d4
+    sub.w   %d3,%d4
+    move.b  %d7,%d0
+    bra     .lr_x_set
+
+.lr_vp1_neq:
+    /* push pixa,pixb */
+    move.w  %d0,-(%a7)          /* pixb */
+    move.w  %d5,-(%a7)          /* pixa */
+    bsr     mp_get1bit
+    bcc     .lr_vp1_b10
+    /* bit1=1: pixels &= ~pixb & ~pixa//; pixstream */
+    move.w  8(%a7),-6(%a6)      /* pixels = base_pixels (+4 bytes pushados) */
+    move.w  -6(%a6),%d0
+    moveq   #1,%d1
+    moveq   #0,%d2
+    move.b  2(%a7),%d2          /* pixb */
+    lsl.w   %d2,%d1
+    not.w   %d1
+    and.w   %d1,%d0
+    moveq   #1,%d1
+    moveq   #0,%d2
+    move.b  (%a7),%d2           /* pixa */
+    lsl.w   %d2,%d1
+    not.w   %d1
+    and.w   %d1,%d0
+    move.w  %d0,-6(%a6)
+    move.w  %d0,%d5
+    addq.l  #4,%a7              /* pop pixa+pixb */
+    move.w  %d3,-(%a7)
+    move.w  %d1,-(%a7)
+    bsr     mp_pxstr_d5
+    move.w  (%a7)+,%d1
+    move.w  (%a7)+,%d3
+    moveq   #7,%d4
+    sub.w   %d3,%d4
+    move.b  %d7,%d0
+    bra     .lr_x_set
+.lr_vp1_b10:
+    /* vpref=0//; pix=pixb */
+    moveq   #0,%d0
+    move.b  2(%a7),%d0          /* pixb */
+    addq.l  #4,%a7
+    clr.w   (%a7)               /* vpref=0 */
+    moveq   #7,%d4
+    sub.w   %d3,%d4
+    bra     .lr_x_set
+
+.lr_vp1_left:
+    move.w  %d4,%d5
+    subq.w  #1,%d5
+    get_pix_m %a2, %d5, %d1
+    bra     .lr_x_set
+
+.lr_x_pref0:
+    bsr     mp_get1bit
+    bcc     .lr_vp0_up
+
+    move.w  %d1,-(%a7)          /* save row */
+    move.w  %d4,%d5
+    subq.w  #1,%d5
+    get_pix_m %a2, %d5, %d1    /* pixa */
+    move.b  %d0,%d5
+    move.w  (%a7),%d0
+    subq.w  #1,%d0
+    get_pix_m %a2, %d4, %d0    /* pixb */
+    move.w  (%a7)+,%d1          /* restore row */
+
+    cmp.b   %d5,%d0
+    bne     .lr_vp0_neq
+    move.w  6(%a7),-6(%a6)
+    move.w  -6(%a6),%d0
+    moveq   #1,%d1
+    moveq   #0,%d2
+    move.b  %d5,%d2
+    lsl.w   %d2,%d1
+    not.w   %d1
+    and.w   %d1,%d0
+    move.w  %d0,%d5
+    move.w  %d3,-(%a7)
+    move.w  %d1,-(%a7)
+    bsr     mp_pxstr_d5
+    move.w  (%a7)+,%d1
+    move.w  (%a7)+,%d3
+    moveq   #7,%d4
+    sub.w   %d3,%d4
+    move.b  %d7,%d0
+    bra     .lr_x_set
+
+.lr_vp0_neq:
+    move.w  %d0,-(%a7)          /* pixb */
+    move.w  %d5,-(%a7)          /* pixa */
+    bsr     mp_get1bit
+    bcc     .lr_vp0_b10
+    move.w  8(%a7),-6(%a6)
+    move.w  -6(%a6),%d0
+    moveq   #1,%d1
+    moveq   #0,%d2
+    move.b  2(%a7),%d2
+    lsl.w   %d2,%d1
+    not.w   %d1
+    and.w   %d1,%d0
+    moveq   #1,%d1
+    moveq   #0,%d2
+    move.b  (%a7),%d2
+    lsl.w   %d2,%d1
+    not.w   %d1
+    and.w   %d1,%d0
+    move.w  %d0,-6(%a6)
+    move.w  %d0,%d5
+    addq.l  #4,%a7
+    move.w  %d3,-(%a7)
+    move.w  %d1,-(%a7)
+    bsr     mp_pxstr_d5
+    move.w  (%a7)+,%d1
+    move.w  (%a7)+,%d3
+    moveq   #7,%d4
+    sub.w   %d3,%d4
+    move.b  %d7,%d0
+    bra     .lr_x_set
+.lr_vp0_b10:
+    /* vpref=1//; pix=pixa */
+    moveq   #0,%d0
+    move.b  (%a7),%d0
+    addq.l  #4,%a7
+    move.w  #1,(%a7)
+    moveq   #7,%d4
+    sub.w   %d3,%d4
+    bra     .lr_x_set
+
+.lr_vp0_up:
+    move.w  %d1,%d0
+    subq.w  #1,%d0
+    get_pix_m %a2, %d4, %d0
+    bra     .lr_x_set
+
+.lr_x_vmap:
+    move.w  %d4,%d5
+    subq.w  #1,%d5
+    get_pix_m %a2, %d5, %d1
+
+.lr_x_set:
+    set_pix_m %a2, %d4, %d1, %d0
+.lr_x_next:
+    dbra    %d3,.lr_xloop
+
+.lr_y_next:
+    dbra    %d2,.lr_yloop
+
+    /* a4 = tile_ptr + 32 */
+    move.l  8(%a7),%a4
+    add.l   #32,%a4
+    move.w  6(%a7),-6(%a6)      /* restaura pixels = base_pixels */
+
+    addq.l  #8,%a7
+    addq.l  #4,%a7
+    rts
+
+//;==============================================================================
+//; mp_build_tables — constrói mp_bitmask (32 bytes) em RAM
+//; Única tabela necessária em RAM. Chamar uma vez na inicialização.
+//;==============================================================================
+    .globl  mp_build_tables
+mp_build_tables:
+    movem.l %d0/%d1/%a0,-(%a7)
+    lea     mp_bitmask,%a0
+    move.w  #0xFFFE,%d0
+    moveq   #15,%d1
+.bt_mask:
+    move.w  %d0,(%a0)+
+    rol.w   #1,%d0
+    dbra    %d1,.bt_mask
+    movem.l (%a7)+,%d0/%d1/%a0
+    rts
+
+//;==============================================================================
+//; mp_call_megaunp — ponto de entrada C-compatível
+//;   u32 mp_call_megaunp(const u8 *src, u8 *dst)//;
+//;   Convenção m68k-elf (SGDK): 4(sp)=src, 8(sp)=dst
+//;   Retorno: d0.l = bytes escritos
+//;
+//; Registradores fixos durante a descompressão:
+//;   d7.l = cmp   (bitstream: bits válidos em 31..32-used, MSB first)
+//;   d6.b = used  (bits válidos em cmp, 0..16)
+//;   a5   = src   (ponteiro de leitura)
+//;   a4   = destadr (ponteiro de escrita, avança tile a tile)
+//;   a3   = mp_nth_set_bit (ROM)
+//;   a1   = mp_minbits_rom (ROM) — para getstream
+//;   a0   = mp_addifhi_rom (ROM) — para getstream
+//;   (a2 = livre para tile base dentro de unpack_sim/linerep)
+//;==============================================================================
+    .globl  mp_call_megaunp
+mp_call_megaunp:
+    movem.l %d2-%d7/%a2-%a6,-(%a7) /* salva 13 registradores = 52 bytes */
+
+    move.l  56(%a7),%a5            /* src */
+    move.l  60(%a7),%a4            /* dst */
+
+    /* ponteiros de tabela ROM */
+    movea.l #mp_nth_set_bit,%a3
+    movea.l #mp_minbits_rom,%a1
+    movea.l #mp_addifhi_rom,%a0
+
+    /* inicializa bitstream C: cmp=0, used=0 */
+    moveq   #0,%d7
+    moveq   #0,%d6
+
+    link    %a6,#-8
+    /* frame: -2(a6)=chnum, -4(a6)=chi, -6(a6)=colset_cur, -8(a6)=vmaptmp */
+
+    /* tiles_num = read_bits(8) + (read_bits(2) << 8) */
+    moveq   #8,%d0
+    bsr     mp_getbits
+    move.w  %d7,%d1
+    moveq   #2,%d0
+    bsr     mp_getbits
+    lsl.w   #8,%d7
+    add.w   %d7,%d1
+    move.w  %d1,-2(%a6)            /* chnum */
+
+    /* set_range = min(chnum, 512) */
+    cmp.w   #512,%d1
+    bls     .mc_csr_ok
+    move.w  #512,%d1
+.mc_csr_ok:
+    bsr     mp_getstream           /* set_nums = getstream(set_range) */
+
+    /* colsets: empilha em ordem crescente (colset[0] mais profundo) */
+    move.w  %d7,%d3                /* set_nums */
+    move.w  %d3,%d4
+    bra     .mc_cs0                /* primeiro sempre raw */
+
+.mc_csloop:
+    bsr     mp_get1bit
+    bcs     .mc_cs_raw
+
+    /* delta colset */
+    move.w  %d4,%d1
+    sub.w   %d3,%d1                /* num_colsets_so_far */
+    bsr     mp_getstream           /* delta */
+    add.w   %d7,%d7                /* delta*2 (índice word) */
+    move.w  (%a7,%d7.w),%d2        /* colset base = colsets[delta] */
+    moveq   #4,%d0
+    bsr     mp_getbits             /* bit_pos */
+    moveq   #1,%d1
+    lsl.w   %d7,%d1                /* 1 << bit_pos  (d7=bit_pos após getbits) */
+    eor.w   %d1,%d2
+    move.w  %d2,-(%a7)
+    bra     .mc_cs_next
+
+.mc_cs_raw:
+.mc_cs0:
+    moveq   #16,%d0
+    bsr     mp_getbits
+    move.w  %d7,-(%a7)
+.mc_cs_next:
+    dbra    %d3,.mc_csloop
+
+    /* loop de tiles */
+    move.w  #1,-(%a7)              /* colset_indx+1 */
+    clr.w   -4(%a6)                /* chi = 0 */
+
+.mc_chiloop:
+    move.w  (%a7),%d1
+    move.w  %d1,%d3
+    bsr     mp_getstream
+    tst.w   %d7
+    bne     .mc_no_inc
+    addq.w  #1,(%a7)
+.mc_no_inc:
+    sub.w   %d3,%d7
+    add.w   %d7,%d7                /* *2 */
+    move.w  -8(%a6,%d7.w),-6(%a6) /* colset_cur */
+
+    bsr     mp_get1bit
+    bcs     .mc_dolr
+    bsr     unpack_sim
+    bra     .mc_next
+.mc_dolr:
+    bsr     unpack_linerep
+.mc_next:
+    addq.w  #1,-4(%a6)
+    move.w  -4(%a6),%d0
+    cmp.w   -2(%a6),%d0
+    bne     .mc_chiloop
+
+    /* retorna bytes escritos = chnum * 32 */
+    moveq   #0,%d0
+    move.w  -2(%a6),%d0
+    lsl.l   #5,%d0
+
+    unlk    %a6
+    movem.l (%a7)+,%d2-%d7/%a2-%a6
+    rts
+
+    .end

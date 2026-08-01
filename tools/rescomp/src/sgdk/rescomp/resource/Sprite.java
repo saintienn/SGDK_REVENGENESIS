@@ -1,5 +1,8 @@
 package sgdk.rescomp.resource;
 
+import java.awt.Color;
+import java.awt.Graphics2D;
+import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -7,11 +10,15 @@ import java.util.List;
 
 import sgdk.rescomp.Resource;
 import sgdk.rescomp.resource.internal.SpriteAnimation;
+import sgdk.rescomp.resource.internal.SpriteFrame;
+import sgdk.rescomp.resource.internal.VDPSprite;
 import sgdk.rescomp.tool.Util;
 import sgdk.rescomp.type.Basics.CollisionType;
 import sgdk.rescomp.type.Basics.Compression;
+import sgdk.rescomp.type.SpriteCell.OptimizationLevel;
 import sgdk.rescomp.type.SpriteCell.OptimizationType;
 import sgdk.tool.ArrayMath;
+import sgdk.tool.FileUtil;
 import sgdk.tool.ImageUtil;
 import sgdk.tool.ImageUtil.BasicImageInfo;
 
@@ -27,8 +34,8 @@ public class Sprite extends Resource
 
     public final Palette palette;
 
-    public Sprite(String id, String imgFile, int wf, int hf, Compression compression, int time, CollisionType collision,
-            OptimizationType opt, long optIteration) throws IOException, IllegalArgumentException
+    public Sprite(String id, String imgFile, int wf, int hf, Compression compression, int[][] time, CollisionType collision, OptimizationType optType,
+            OptimizationLevel optLevel, boolean showCut, boolean optDuplicate) throws Exception
     {
         super(id);
 
@@ -39,54 +46,42 @@ public class Sprite extends Resource
 
         // frame size over limit (we need VDP sprite offset to fit into u8 type)
         if ((wf >= 32) || (hf >= 32))
-            throw new IllegalArgumentException(
-                    "SPRITE '" + id + "' has frame width or frame height >= 32 (not supported)");
+            throw new IllegalArgumentException("SPRITE '" + id + "' has frame width or frame height >= 32 tiles (not supported)");
 
         // set frame size
         this.wf = wf;
         this.hf = hf;
 
-        // retrieve basic infos about the image
-        final BasicImageInfo imgInfo = ImageUtil.getBasicInfo(imgFile);
+        // get 8bpp pixels and also check image dimension is aligned to tile
+        final byte[] image = ImageUtil.getImageAs8bpp(imgFile, true, true);
 
-        // check BPP is correct
-        if (imgInfo.bpp > 8)
-            throw new IllegalArgumentException("'" + imgFile + "' is in " + imgInfo.bpp
-                    + " bpp format, only indexed images (8,4,2,1 bpp) are supported.");
-
-        // set width and height
-        final int w = imgInfo.w;
-        final int h = imgInfo.h;
-
-        // check size is correct
-        if ((w & 7) != 0)
-            throw new IllegalArgumentException("'" + imgFile + "' width is '" + w + ", should be a multiple of 8.");
-        if ((h & 7) != 0)
-            throw new IllegalArgumentException("'" + imgFile + "' height is '" + h + ", should be a multiple of 8.");
-
-        // get image data
-        byte[] imgData = ImageUtil.getIndexedPixels(imgFile);
-        // convert to 8 bpp
-        imgData = ImageUtil.convertTo8bpp(imgData, imgInfo.bpp);
+        // happen when we couldn't retrieve palette data from RGB image
+        if (image == null)
+            throw new IllegalArgumentException(
+                    "RGB image '" + imgFile + "' does not contains palette data (see 'Important note about image format' in the rescomp.txt file");
 
         // find max color index
-        final int maxIndex = ArrayMath.max(imgData, false);
+        final int maxIndex = ArrayMath.max(image, false);
         if (maxIndex >= 64)
             throw new IllegalArgumentException("'" + imgFile
-                    + "' uses color index >= 64, SPRITE resource requires image with a maximum of 64 colors, use 4bpp image instead if you are unsure.");
+                    + "' uses color index >= 64, SPRITE resource requires image with a maximum of 64 colors, use 4bpp indexed colors image instead if you are unsure.");
+
+        // retrieve basic infos about the image
+        final BasicImageInfo imgInfo = ImageUtil.getBasicInfo(imgFile);
+        final int w = imgInfo.w;
+        // we determine 'h' from data length and 'w' as we can crop image vertically to remove palette data
+        final int h = image.length / w;
 
         final int palIndex;
         try
         {
             // get palette index used (only 1 palette allowed for sprite)
-            palIndex = ImageUtil.getSpritePaletteIndex(imgData, imgInfo.w, imgInfo.h);
+            palIndex = ImageUtil.getSpritePaletteIndex(image, w, h);
         }
         catch (IllegalArgumentException e)
         {
             throw new IllegalArgumentException(
-                    "'" + imgFile
-                            + "' SPRITE resource use more than 1 palette (16 colors), use 4bpp image instead if you are unsure.",
-                    e);
+                    "'" + imgFile + "' SPRITE resource use more than 1 palette (16 colors), use 4bpp indexed colors image instead if you are unsure.", e);
         }
         // get size in tile
         final int wt = w / 8;
@@ -94,29 +89,47 @@ public class Sprite extends Resource
 
         // check image size is correct
         if ((wt % wf) != 0)
-            throw new IllegalArgumentException(
-                    "Error: '" + imgFile + "' width (" + w + ") is not a multiple of cell width (" + (wf * 8) + ").");
+            throw new IllegalArgumentException("Error: '" + imgFile + "' width (" + w + ") is not a multiple of cell width (" + (wf * 8) + ").");
         if ((ht % hf) != 0)
-            throw new IllegalArgumentException(
-                    "Error: '" + imgFile + "' height (" + h + ") is not a multiple of cell height (" + (hf * 8) + ").");
+            throw new IllegalArgumentException("Error: '" + imgFile + "' height (" + h + ") is not a multiple of cell height (" + (hf * 8) + ").");
 
         // build PALETTE
         palette = (Palette) addInternalResource(new Palette(id + "_palette", imgFile, palIndex * 16, 16, true));
 
+        // for debug purpose (scale image x2 so it's easier to see bounding boxes)
+        final BufferedImage bufImg = ImageUtil.scale(ImageUtil.load(imgFile), w * 2 , h * 2, false);
+        final Graphics2D g2 = bufImg.createGraphics();
+        g2.setColor(Color.pink);
+
         // get number of animation
         final int numAnim = ht / hf;
 
+        int yOff = 0;
         for (int i = 0; i < numAnim; i++)
         {
             // build sprite animation
-            SpriteAnimation animation = new SpriteAnimation(id + "_animation" + i, imgData, wt, ht, i, wf, hf, time,
-                    collision, compression, opt, optIteration);
+            SpriteAnimation animation = new SpriteAnimation(id + "_animation" + i, image, wt, ht, i, wf, hf, time[Math.min(time.length - 1, i)], collision, compression, optType, optLevel, optDuplicate);
 
             // check if empty
             if (!animation.isEmpty())
             {
                 // add as internal resource (get duplicate if exist)
                 animation = (SpriteAnimation) addInternalResource(animation);
+
+                if (showCut)
+                {
+                    int xOff = 0;
+                    // add 32 pixels margin for RGB image (contains palette data in row 0-31)
+                    int yMargin = (imgInfo.bpp > 8) ? 32 : 0;
+                    for (SpriteFrame frame : animation.frames)
+                    {
+                        for (VDPSprite spr : frame.vdpSprites)
+                            g2.drawRect((xOff + spr.offsetX) * 2, (yMargin + yOff + spr.offsetY) * 2, ((spr.wt * 8) * 2) - 1, ((spr.ht * 8) * 2) - 1);
+
+                        // for debug purpose
+                        xOff += wf * 8;
+                    }
+                }
 
                 // update maximum number of tile and sprite
                 maxNumTile = Math.max(maxNumTile, animation.getMaxNumTile());
@@ -125,11 +138,19 @@ public class Sprite extends Resource
                 // add animation
                 animations.add(animation);
             }
+
+            // for debug purpose
+            yOff += hf * 8;
         }
 
+        g2.dispose();
+
+        // for debug purpose
+        if (showCut)
+            ImageUtil.save(bufImg, "png", FileUtil.setExtension(imgFile, "") + "_opt.png");
+
         // compute hash code
-        hc = (wf << 0) ^ (hf << 8) ^ (maxNumTile << 16) ^ (maxNumSprite << 24) ^ animations.hashCode()
-                ^ palette.hashCode();
+        hc = (wf << 0) ^ (hf << 8) ^ (maxNumTile << 16) ^ (maxNumSprite << 24) ^ animations.hashCode() ^ palette.hashCode();
     }
 
     @Override
@@ -144,19 +165,23 @@ public class Sprite extends Resource
         if (obj instanceof Sprite)
         {
             final Sprite sprite = (Sprite) obj;
-            return (wf == sprite.wf) && (hf == sprite.hf) && (maxNumTile == sprite.maxNumTile)
-                    && (maxNumSprite == sprite.maxNumSprite) && animations.equals(sprite.animations)
-                    && palette.equals(sprite.palette);
+            return (wf == sprite.wf) && (hf == sprite.hf) && (maxNumTile == sprite.maxNumTile) && (maxNumSprite == sprite.maxNumSprite)
+                    && animations.equals(sprite.animations) && palette.equals(sprite.palette);
         }
 
         return false;
     }
 
     @Override
+    public List<Bin> getInternalBinResources()
+    {
+        return new ArrayList<>();
+    }
+
+    @Override
     public String toString()
     {
-        return id + ": wf=" + wf + " hf=" + hf + " numAnim=" + animations.size() + " maxNumTile=" + maxNumSprite
-                + " maxNumSprite=" + maxNumSprite;
+        return id + ": wf=" + wf + " hf=" + hf + " numAnim=" + animations.size() + " maxNumTile=" + maxNumTile + " maxNumSprite=" + maxNumSprite;
     }
 
     @Override

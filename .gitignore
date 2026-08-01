@@ -17,33 +17,33 @@
 *.ini
 *.rs
 *.d
+**/cmd_
+**/.DS_Store
 **/.settings/**
-**/out/**
+**/out
+**/res/*.h
 !**/out/rom.bin
-symbol.txt
-rom_head.bin
+!out/release/res/*.h
+!out/debug/res/*.h
+**/symbol.txt
+**/rom_head.bin
 **/Debug
 **/Release
-sega.s
-rom_head.c
-!src/boot/sega.s
-!src/boot/rom_head.c
-**/res/*.h
-res/libres.s
-!res/libres.h
-src/z80_*.s
 archive
 cb
 not needed
 sample/sound/loss
+tools/archives
 tools/extras
 tools/old
 tools/genesis_tools.workspace
 tools/emu
 tools/lz4w/test
-tools/lz4w/bin
 tools/lz4w/lz4w.jar
 tools/rescomp/format
 tools/rescomp/rescomp.jar
-tools/xgm rom builder/bin
-**/.DS_Store
+tools/xgm rom builder
+project/test
+tools/.gradle/
+tools/.project
+tools/build/

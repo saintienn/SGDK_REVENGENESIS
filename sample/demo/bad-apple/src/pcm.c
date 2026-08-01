@@ -1,5 +1,4 @@
-#include "genesis.h"
-#include "smp_null_pcm.h"
+#include <genesis.h>
 
 #include "pcm.h"
 #include "z80_drv.h"
@@ -11,7 +10,7 @@ void loadDriver()
     u32 addr;
 
     // upload Z80 driver and reset Z80
-    Z80_upload(0, z80_drv, sizeof(z80_drv), TRUE);
+    Z80_upload(0, z80_drv, sizeof(z80_drv));
 
     // misc parameters initialisation
     Z80_requestBus(TRUE);
@@ -19,13 +18,13 @@ void loadDriver()
     // point to Z80 null sample parameters
     pb = (u8 *) (Z80_DRV_PARAMS + 0x20);
 
-    addr = (u32) smp_null_pcm;
+    addr = (u32) smp_null_dpcm;
     // null sample address (128 bytes aligned)
     pb[0] = addr >> 7;
     pb[1] = addr >> 15;
     // null sample length (128 bytes aligned)
-    pb[2] = sizeof(smp_null_pcm) >> 7;
-    pb[3] = sizeof(smp_null_pcm) >> 15;
+    pb[2] = sizeof(smp_null_dpcm) >> 7;
+    pb[3] = sizeof(smp_null_dpcm) >> 15;
 
     Z80_releaseBus();
     // wait bus released
@@ -56,15 +55,9 @@ void loadDriver()
 void startPlay(const u8 *sample, const u32 len, const u8 loop)
 {
     vu8 *pb;
-    u8 status;
     u32 addr;
 
     Z80_requestBus(TRUE);
-
-    // point to Z80 status
-    pb = (u8 *) Z80_DRV_STATUS;
-    // get status
-    status = *pb;
 
     // point to Z80 base parameters
     pb = (u8 *) Z80_DRV_PARAMS;
@@ -102,13 +95,13 @@ void stopPlay()
     // point to Z80 internal parameters
     pb = (u8 *) (Z80_DRV_PARAMS + 0x10);
 
-    addr = (u32) smp_null_pcm;
+    addr = (u32) smp_null_dpcm;
     // sample address (128 bytes aligned)
     pb[0] = addr >> 7;
     pb[1] = addr >> 15;
     // sample length (128 bytes aligned)
-    pb[2] = sizeof(smp_null_pcm) >> 7;
-    pb[3] = sizeof(smp_null_pcm) >> 15;
+    pb[2] = sizeof(smp_null_dpcm) >> 7;
+    pb[3] = sizeof(smp_null_dpcm) >> 15;
 
     // point to Z80 status
     pb = (u8 *) Z80_DRV_STATUS;

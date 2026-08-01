@@ -116,12 +116,11 @@
 /**
  *  \deprecated Use BMP_getPixelFast(..) instead (inlining make macro useless)
  */
-#define BMP_GETPIXEL(x, y)          BMP_getPixelFast(x, y)
-
+#define BMP_GETPIXEL(x, y)          _Pragma("GCC error \"This method is deprecated, use BMP_getPixelFast(..) instead.\"")
 /**
  *  \deprecated Use BMP_setPixelFast(..) instead (inlining make macro useless)
  */
-#define BMP_SETPIXEL(x, y, col)     BMP_setPixelFast(x, y, col)
+#define BMP_SETPIXEL(x, y, col)     _Pragma("GCC error \"This method is deprecated, use BMP_setPixelFast(..) instead.\"")
 
 
 #define BMP_BASE_TILE_INDEX         TILE_USER_INDEX
@@ -131,10 +130,12 @@
 
 #define BMP_FB0_END_TILE_INDEX      (BMP_FB0_TILE_INDEX + (BMP_TILE_WIDTH * BMP_TILE_HEIGHT))
 #define BMP_FB1_END_TILE_INDEX      (BMP_FB1_TILE_INDEX + (BMP_TILE_WIDTH * BMP_TILE_HEIGHT))
+#define BMP_END_TILE_INDEX          BMP_FB1_END_TILE_INDEX
 
 #define BMP_BASE_ADDR               (BMP_BASE_TILE_INDEX * 32)
 #define BMP_FB0_ADDR                (BMP_FB0_TILE_INDEX * 32)
 #define BMP_FB1_ADDR                (BMP_FB1_TILE_INDEX * 32)
+#define BMP_END_ADDR                (BMP_END_TILE_INDEX * 32)
 
 
 /**
@@ -404,8 +405,12 @@ void BMP_clearTextLine(u16 y);
  *
  *  \param float_display
  *      If this value is true (!= 0) the frame rate is displayed as float (else it's integer).
+ *  \param x
+ *      X coordinate (in tile).
+ *  \param y
+ *      y coordinate (in tile).
  */
-void BMP_showFPS(u16 float_display);
+void BMP_showFPS(u16 float_display, u16 x, u16 y);
 
 /**
  *  \brief
@@ -595,14 +600,14 @@ void BMP_drawBitmapData(const u8 *data, u16 x, u16 y, u16 w, u16 h, u32 pitch);
  *  \param y
  *      y coordinate.
  *  \param loadpal
- *      Load the bitmap palette information when non zero.
+ *      Load the bitmap palette information.
  *  \return
  *      FALSE if there is not enough memory to unpack the specified Bitmap (only if compression was enabled).
  *
  * X coordinate is aligned to even value for performance reason.<br>
  * So BMP_drawBitmap(bitmap,0,0,TRUE) will produce same result as BMP_drawBitmap(bitmap,1,0,TRUE)
  */
-u16 BMP_drawBitmap(const Bitmap *bitmap, u16 x, u16 y, u16 loadpal);
+bool BMP_drawBitmap(const Bitmap *bitmap, u16 x, u16 y, bool loadpal);
 /**
  *  \brief
  *      Load and draw a Genesis Bitmap with specified dimension.<br>
@@ -623,36 +628,36 @@ u16 BMP_drawBitmap(const Bitmap *bitmap, u16 x, u16 y, u16 loadpal);
  *  \param h
  *      final height.
  *  \param loadpal
- *      Load the bitmap palette information when non zero.
+ *      Load the bitmap palette information
  *  \return
  *      FALSE if there is not enough memory to unpack the specified Bitmap (only if compression was enabled).
  *
  * X coordinate as width are aligned to even values for performance reason.<br>
  * So BMP_drawBitmapScaled(bitmap,0,0,w,h,pal) will produce same result as BMP_drawBitmapScaled(bitmap,1,0,w,h,pal)
  */
-u16 BMP_drawBitmapScaled(const Bitmap *bitmap, u16 x, u16 y, u16 w, u16 h, u16 loadpal);
+bool BMP_drawBitmapScaled(const Bitmap *bitmap, u16 x, u16 y, u16 w, u16 h, bool loadpal);
 
 /**
  *  \deprecated
  *      Use BMP_drawBitmapData(..) instead.
  */
-void BMP_loadBitmapData(const u8 *data, u16 x, u16 y, u16 w, u16 h, u32 pitch);
+#define BMP_loadBitmapData(data, x, y, w, h, pitch)             _Pragma("GCC error \"This method is deprecated, use BMP_drawBitmapData(..) instead.\"")
 /**
  *  \deprecated
  *      Use BMP_drawBitmap(..) instead.
  */
-void BMP_loadBitmap(const Bitmap *bitmap, u16 x, u16 y, u16 loadpal);
+#define BMP_loadBitmap(bitmap, x, y, loadpal)                   _Pragma("GCC error \"This method is deprecated, use BMP_drawBitmap(..) instead.\"")
 /**
  *  \deprecated
  *      Use BMP_drawBitmapEx(..) instead.
  */
-void BMP_loadAndScaleBitmap(const Bitmap *bitmap, u16 x, u16 y, u16 w, u16 h, u16 loadpal);
+#define BMP_loadAndScaleBitmap(bitmap, x, y, w, h, loadpal)     _Pragma("GCC error \"This method is deprecated, use BMP_drawBitmapScaled(..) instead.\"")
 
 /**
  *  \deprecated
  *      Uses bitmap->palette instead.
  */
-void BMP_getBitmapPalette(const Bitmap *bitmap, u16 *pal);
+#define BMP_getBitmapPalette(bitmap, pal)                       _Pragma("GCC error \"This method is deprecated, use bitmap->palette instead.\"")
 
 /**
  *  \brief

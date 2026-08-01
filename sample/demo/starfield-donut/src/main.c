@@ -4,7 +4,7 @@
  * modified by Stef
  */
 
-#include "genesis.h"
+#include <genesis.h>
 #include "gfx.h"
 
 #define    TABLE_LEN       220
@@ -36,8 +36,8 @@ static void fastStarFieldFX()
     SYS_disableInts();
 
     VDP_setPlaneSize(64, 32, TRUE);
-    VDP_clearPlane(BG_A, 0);
-    VDP_clearPlane(BG_B, 0);
+    VDP_clearPlane(BG_A, TRUE);
+    VDP_clearPlane(BG_B, TRUE);
 
     /* Draw the foreground */
     VDP_drawImageEx(BG_B, &starfield, TILE_ATTR_FULL(PAL1, FALSE, FALSE, FALSE, vramIndex), 0, 0, TRUE, FALSE);
@@ -112,7 +112,7 @@ static void fastStarFieldFX()
         for(i = 0; i < TABLE_LEN; i++)
         {
             scroll_PLAN_B_F[i] += scroll_speed[i];
-            scroll_PLAN_B[i] = fix16ToInt(scroll_PLAN_B_F[i]) & 0x1FF;
+            scroll_PLAN_B[i] = F16_toInt(scroll_PLAN_B_F[i]) & 0x1FF;
         }
 
         /*    Animate the donuts */
@@ -131,7 +131,7 @@ static void fastStarFieldFX()
         SPR_update();
 
 //        SYS_disableInts();
-//        VDP_showFPS(FALSE);
+//        VDP_showFPS(FALSE, 1, 1);
 //        SYS_enableInts();
 
         //VDP_waitVSync();

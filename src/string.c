@@ -20,8 +20,8 @@
 #define P10 10000000000
 
 #if (ENABLE_NEWLIB == 0)
-static const char const uppercase_hexchars[] = "0123456789ABCDEF";
-static const char const lowercase_hexchars[] = "0123456789abcdef";
+static const char uppercase_hexchars[] = "0123456789ABCDEF";
+static const char lowercase_hexchars[] = "0123456789abcdef";
 #endif  // ENABLE_NEWLIB
 static const char digits[] =
     "0001020304050607080910111213141516171819"
@@ -41,47 +41,43 @@ static u16 skip_atoi(const char **s);
 #if (ENABLE_NEWLIB == 0)
 u16 strlen(const char *str)
 {
-    const char *src;
+    const char *src = str;
+    u16 result = 0;
 
-    src = str;
-    while (*src++);
+    while (*src++) result++;
 
-    return (src - str) - 1;
+    return result;
 }
 
 u16 strnlen(const char *str, u16 maxlen)
 {
-    const char *src;
+    const char *src = str;
+    u16 i = maxlen;
 
-    for (src = str; maxlen-- && *src != '\0'; ++src)
-        /* nothing */;
+    while(*src++ && i) i--;
 
-    return src - str;
+    return maxlen - i;
 }
 
-s16 strcmp(const char *str1, const char *str2)
+s8 strcmp(const char *str1, const char *str2)
 {
     const u8 *p1 = (const u8*) str1;
     const u8 *p2 = (const u8*) str2;
-    u8 c1, c2;
 
-    do
+    while(*p1 && (*p1 == *p2))
     {
-        c1 = *p1++;
-        c2 = *p2++;
+        p1++;
+        p2++;
     }
-    while (c1 && (c1 == c2));
 
-    return c1 - c2;
+    return *p1 - *p2;
 }
 
 char* strcpy(char *to, const char *from)
 {
-    const char *src;
-    char *dst;
+    const char *src = from;
+    char *dst = to;
 
-    src = from;
-    dst = to;
     while ((*dst++ = *src++));
 
     return to;
@@ -89,17 +85,18 @@ char* strcpy(char *to, const char *from)
 
 char* strncpy(char *to, const char *from, u16 len)
 {
-    const char *src;
-    char *dst;
-    u16 i;
+    const char *src = from;
+    char *dst = to;
+    u16 i = len;
 
-    src = from;
-    dst = to;
-    i = 0;
-    while ((i++ < len) && (*dst++ = *src++));
+    while (i && *src)
+    {
+        *dst++ = *src++;
+        i--;
+    }
 
     // end string by null character
-    if (i > len) *dst = 0;
+    *dst = 0;
 
     return to;
 }
@@ -120,17 +117,22 @@ char* strncpy(char *to, const char *from, u16 len)
 
 char* strcat(char *to, const char *from)
 {
-    const char *src;
-    char *dst;
+    const char *src = from;
+    char *dst = to;
 
-    src = from;
-    dst = to;
-    while (*dst++);
-
-    --dst;
+    while (*dst) dst++;
     while ((*dst++ = *src++));
 
     return to;
+}
+
+char* strchr(const char *from, char c)
+{
+    const char *src = from;
+
+	while (*src && (*src != c)) src++;
+
+    return (*src == c) ? (char*)src : NULL;
 }
 #endif  // ENABLE_NEWLIB
 
@@ -276,35 +278,6 @@ u16 intToHex(u32 value, char *str, u16 minsize)
     return dst - str;
 }
 
-void fix32ToStr(fix32 value, char *str, u16 numdec)
-{
-    char *dst = str;
-    fix32 v = value;
-
-    if (v < 0)
-    {
-        v = -v;
-        *dst++ = '-';
-    }
-
-    dst += uintToStr(fix32ToInt(v), dst, 1);
-    *dst++ = '.';
-
-    // get fractional part
-    const u16 frac = (((u16) fix32Frac(v)) * (u16) 1000) / ((u16) 1 << FIX32_FRAC_BITS);
-    u16 len = uint16ToStr(frac, dst, 3);
-
-    if (len < numdec)
-    {
-        // need to add ending '0'
-        dst += len;
-        while(len++ < numdec) *dst++ = '0';
-        // mark end here
-        *dst = 0;
-    }
-    else dst[numdec] = 0;
-}
-
 void fix16ToStr(fix16 value, char *str, u16 numdec)
 {
     char *dst = str;
@@ -316,11 +289,11 @@ void fix16ToStr(fix16 value, char *str, u16 numdec)
         *dst++ = '-';
     }
 
-    dst += uint16ToStr(fix16ToInt(v), dst, 1);
+    dst += uint16ToStr((u16) F16_toInt(v), dst, 1);
     *dst++ = '.';
 
     // get fractional part
-    const u16 frac = (((u16) fix16Frac(v)) * (u16) 1000) / ((u16) 1 << FIX16_FRAC_BITS);
+    const u16 frac = mulu((u16) F16_frac(v), 1000) >> FIX16_FRAC_BITS;
     u16 len = uint16ToStr(frac, dst, 3);
 
     if (len < numdec)
@@ -334,6 +307,112 @@ void fix16ToStr(fix16 value, char *str, u16 numdec)
     else dst[numdec] = 0;
 }
 
+void fix32ToStr(fix32 value, char *str, u16 numdec)
+{
+    char *dst = str;
+    fix32 v = value;
+
+    if (v < 0)
+    {
+        v = -v;
+        *dst++ = '-';
+    }
+
+    dst += uintToStr((u32) F32_toInt(v), dst, 1);
+    *dst++ = '.';
+
+    // get fractional part
+    const u16 frac = mulu((u16) F32_frac(v), 1000) >> FIX32_FRAC_BITS;
+    u16 len = uint16ToStr(frac, dst, 3);
+
+    if (len < numdec)
+    {
+        // need to add ending '0'
+        dst += len;
+        while(len++ < numdec) *dst++ = '0';
+        // mark end here
+        *dst = 0;
+    }
+    else dst[numdec] = 0;
+}
+
+void fastFix16ToStr(fastfix16 value, char *str, u16 numdec)
+{
+    char *dst = str;
+    fastfix16 v = value;
+    
+    if (v < 0)
+    {
+        v = -v;
+        *dst++ = '-';
+    }
+    
+    dst += uint16ToStr((u16) FF16_toInt(v), dst, 1);
+    *dst++ = '.';
+    
+    // get fractional part
+    const u16 frac = mulu((u16) FF16_frac(v), 1000) >> FASTFIX16_FRAC_BITS;
+    u16 len = uint16ToStr(frac, dst, 3);
+    
+    if (len < numdec)
+    {
+        // need to add ending '0'
+        dst += len;
+        while(len++ < numdec) *dst++ = '0';
+        // mark end here
+        *dst = 0;
+    }
+    else dst[numdec] = 0;
+}
+
+void fastFix32ToStr(fastfix32 value, char *str, u16 numdec)
+{
+    char *dst = str;
+    fastfix32 v = value;
+    
+    if (v < 0)
+    {
+        v = -v;
+        *dst++ = '-';
+    }
+    
+    dst += uint16ToStr((u16) FF32_toInt(v), dst, 1);
+    *dst++ = '.';
+    
+    // get fractional part
+    const u16 frac = mulu((u16) FF32_frac(v), 10000) >> FASTFIX32_FRAC_BITS;
+    u16 len = uint16ToStr(frac, dst, 4);
+    
+    if (len < numdec)
+    {
+        // need to add ending '0'
+        dst += len;
+        while(len++ < numdec) *dst++ = '0';
+        // mark end here
+        *dst = 0;
+    }
+    else dst[numdec] = 0;
+}
+
+void F16_toStr(fix16 value, char *str, u16 numdec)
+{
+    fix16ToStr(value, str, numdec);
+}
+
+void F32_toStr(fix32 value, char *str, u16 numdec)
+{
+    fix32ToStr(value, str, numdec);
+}
+
+void FF16_toStr(fastfix16 value, char *str, u16 numdec)
+{
+    fastFix16ToStr(value, str, numdec);
+}
+
+void FF32_toStr(fastfix32 value, char *str, u16 numdec)
+{
+    fastFix32ToStr(value, str, numdec);
+}
 
 static u16 digits10(const u16 v)
 {
@@ -361,7 +440,7 @@ static u16 skip_atoi(const char **s)
     return i;
 }
 
-u16 vsprintf(char *buf, const char *fmt, va_list args)
+int vsprintf(char *buf, const char *fmt, va_list args)
 {
     char tmp_buffer[14];
     s32 i;
@@ -627,10 +706,10 @@ hexa_conv:
     return str - buf;
 }
 
-u16 sprintf(char *buffer, const char *fmt, ...)
+int sprintf(char *buffer, const char *fmt, ...)
 {
     va_list args;
-    u16 i;
+    int i;
 
     va_start(args, fmt);
     i = vsprintf(buffer, fmt, args);

@@ -1,182 +1,264 @@
+# get makefile path in unix format
 MAKEFILE_DIR := $(dir $(lastword $(MAKEFILE_LIST)))
 MAKEFILE_DIR := $(subst \,/,$(MAKEFILE_DIR))
 
-ifneq ("$(wildcard $(MAKEFILE_DIR)bin/rescomp.jar)","")
-    GDK := $(patsubst %/,%,$(MAKEFILE_DIR))
+# test if we have access to SGDK environment, if so we can override the GDK var
+ifneq ($(wildcard $(MAKEFILE_DIR)bin/rescomp.jar),)
+	GDK := $(patsubst %/,%,$(MAKEFILE_DIR))
+else
+    $(warning Cannot find SGDK environment ! Current folder = '${MAKEFILE_DIR}')
 endif
 
 include $(GDK)/common.mk
 
-SRC := src
-RES := res
-INCLUDE := inc
+BUILD_TYPE := release
+ifeq ($(MAKECMDGOALS),debug)
+  	BUILD_TYPE := debug
+else ifeq ($(MAKECMDGOALS),Debug)
+  	BUILD_TYPE := debug
+else ifeq ($(MAKECMDGOALS),clean-debug)
+  	BUILD_TYPE := debug
+else ifeq ($(MAKECMDGOALS),asm)
+  	BUILD_TYPE := asm
+else ifeq ($(MAKECMDGOALS),Asm)
+  	BUILD_TYPE := asm
+else ifeq ($(MAKECMDGOALS),clean-asm)
+  	BUILD_TYPE := asm
+endif
+
+CLEAN := FALSE
+ifeq ($(findstring clean,$(MAKECMDGOALS)),clean)
+	CLEAN := TRUE
+endif
+
+SRC_DIR := src
+RES_DIR := res
+INC_DIR := inc
+OUT_DIR := out/$(BUILD_TYPE)
+DEP_DIR = $(OUT_DIR)/_deps
+OUT_DIR_LIB := $(GDK)/$(OUT_DIR)
 
 
-SRC_C= $(wildcard *.c)
-SRC_C+= $(wildcard $(SRC)/*.c)
-SRC_C+= $(wildcard $(SRC)/*/*.c)
-SRC_C+= $(wildcard $(SRC)/*/*/*.c)
-SRC_C:= $(filter-out $(SRC)/boot/rom_head.c,$(SRC_C))
-SRC_S= $(wildcard *.s)
-SRC_S+= $(wildcard $(SRC)/*.s)
-SRC_S+= $(wildcard $(SRC)/*/*.s)
-SRC_S+= $(wildcard $(SRC)/*/*/*.s)
-SRC_S:= $(filter-out $(SRC)/boot/sega.s,$(SRC_S))
-SRC_ASM= $(wildcard *.asm)
-SRC_ASM+= $(wildcard $(SRC)/*.asm)
-SRC_ASM+= $(wildcard $(SRC)/*/*.asm)
-SRC_ASM+= $(wildcard $(SRC)/*/*/*.asm)
-SRC_S80= $(wildcard *.s80)
-SRC_S80+= $(wildcard $(SRC)/*.s80)
-SRC_S80+= $(wildcard $(SRC)/*/*.s80)
-SRC_S80+= $(wildcard $(SRC)/*/*/*.s80)
+SRC_C = $(wildcard *.c)
+SRC_C += $(wildcard $(SRC_DIR)/*.c)
+SRC_C += $(wildcard $(SRC_DIR)/*/*.c)
+SRC_C += $(wildcard $(SRC_DIR)/*/*/*.c)
+SRC_C += $(wildcard $(SRC_DIR)/*/*/*/*.c)
+SRC_C += $(wildcard $(SRC_DIR)/*/*/*/*/*.c)
+SRC_C := $(filter-out $(SRC_DIR)/rom_header.c,$(SRC_C))
+SRC_S = $(wildcard *.s)
+SRC_S += $(wildcard $(SRC_DIR)/*.s)
+SRC_S += $(wildcard $(SRC_DIR)/*/*.s)
+SRC_S += $(wildcard $(SRC_DIR)/*/*/*.s)
+SRC_S += $(wildcard $(SRC_DIR)/*/*/*/*.s)
+SRC_S += $(wildcard $(SRC_DIR)/*/*/*/*/*.s)
+SRC_ASM = $(wildcard *.asm)
+SRC_ASM += $(wildcard $(SRC_DIR)/*.asm)
+SRC_ASM += $(wildcard $(SRC_DIR)/*/*.asm)
+SRC_ASM += $(wildcard $(SRC_DIR)/*/*/*.asm)
+SRC_ASM += $(wildcard $(SRC_DIR)/*/*/*/*.asm)
+SRC_ASM += $(wildcard $(SRC_DIR)/*/*/*/*/*.asm)
+SRC_ASM := $(SRC_ASM)
+SRC_S80 = $(wildcard *.s80)
+SRC_S80 += $(wildcard $(SRC_DIR)/*.s80)
+SRC_S80 += $(wildcard $(SRC_DIR)/*/*.s80)
+SRC_S80 += $(wildcard $(SRC_DIR)/*/*/*.s80)
+SRC_S80 += $(wildcard $(SRC_DIR)/*/*/*/*.s80)
+SRC_S80 += $(wildcard $(SRC_DIR)/*/*/*/*/*.s80)
+SRC_S80 := $(SRC_S80)
 
-RES_C= $(wildcard $(RES)/*.c)
-RES_S= $(wildcard $(RES)/*.s)
-RES_RES= $(wildcard *.res)
-RES_RES+= $(wildcard $(RES)/*.res)
+RES_RES = $(wildcard *.res)
+RES_RES += $(wildcard $(RES_DIR)/*.res)
+RES_RES += $(wildcard $(RES_DIR)/*/*.res)
+RES_RES += $(wildcard $(RES_DIR)/*/*/*.res)
+RES_RES += $(wildcard $(RES_DIR)/*/*/*/*.res)
+RES_RES += $(wildcard $(RES_DIR)/*/*/*/*/*.res)
+RES_RES := $(RES_RES)
 
-RES_RS= $(RES_RES:.res=.rs)
-RES_H= $(RES_RES:.res=.h)
-RES_DEP= $(RES_RES:.res=.d)
-RES_DEPS= $(addprefix out/, $(RES_DEP))
+RES_O = $(RES_RES:.res=.o)
+RES_O := $(addprefix $(OUT_DIR)/, $(RES_O))
 
-OBJ= $(RES_RES:.res=.o)
-OBJ+= $(RES_S:.s=.o)
-OBJ+= $(RES_C:.c=.o)
-OBJ+= $(SRC_S80:.s80=.o)
-OBJ+= $(SRC_ASM:.asm=.o)
-OBJ+= $(SRC_S:.s=.o)
-OBJ+= $(SRC_C:.c=.o)
-OBJS:= $(addprefix out/, $(OBJ))
+OBJS = $(RES_RES:.res=.o)
+OBJS += $(SRC_S80:.s80=.o)
+OBJS += $(SRC_ASM:.asm=.o)
+OBJS += $(SRC_S:.s=.o)
+OBJS += $(SRC_C:.c=.o)
+OBJS := $(addprefix $(OUT_DIR)/, $(OBJS))
 
-DEPS:= $(OBJS:.o=.d)
+LSTS := $(SRC_C:.c=.lst)
+LSTS := $(addprefix $(OUT_DIR)/, $(LSTS))
 
-#-include $(DEPS)
+DEPS = $(RES_RES:.res=.d)
+DEPS += $(SRC_S:.s=.d)
+DEPS += $(SRC_C:.c=.d)
+DEPS := $(addprefix $(DEP_DIR)/, $(DEPS))
 
-LST:= $(SRC_C:.c=.lst)
-LSTS:= $(addprefix out/, $(LST))
+INCS := -I. -I$(INC_DIR) -I$(RES_DIR) -I$(OUT_DIR) -isystem$(INC_LIB) -isystem$(OUT_DIR_LIB)
+DEFAULT_FLAGS := $(EXTRA_FLAGS) -DSGDK_GCC -m68000 -fdiagnostics-color=always -Wall -Wextra -Wno-shift-negative-value -Wno-main -Wno-unused-parameter -fno-builtin -ffunction-sections -fdata-sections -fms-extensions -B$(BIN)
+Z80_FLAGS := -i. -i$(SRC_DIR) -i$(INC_DIR) -i$(RES_DIR) -i$(OUT_DIR) -i$(SRC_LIB) -i$(INC_LIB) -i$(INC_LIB)/snd -i$(OUT_DIR_LIB)
 
-INCS:= -I$(INCLUDE) -I$(SRC) -I$(RES) -I$(INCLUDE_LIB) -I$(RES_LIB)
-DEFAULT_FLAGS= $(EXTRA_FLAGS) -DSGDK_GCC -m68000 -Wall -Wextra -Wno-shift-negative-value -Wno-main -Wno-unused-parameter -fno-builtin -fms-extensions $(INCS) -B$(BIN)
-FLAGSZ80:= -i$(SRC) -i$(INCLUDE) -i$(RES) -i$(SRC_LIB) -i$(INCLUDE_LIB)
+ifeq ($(BUILD_TYPE),debug)
+	# debug
+	FLAGS := $(INCS) $(DEFAULT_FLAGS) -O1 -DDEBUG=1
+	CFLAGS := $(FLAGS) -ggdb -g
+	AFLAGS := -x assembler-with-cpp -Wa,--register-prefix-optional,--bitwise-or $(FLAGS)
+	LIBMD := $(LIB)/libmd_debug.a
+else ifeq ($(BUILD_TYPE),asm)
+	# asm
+	FLAGS := $(INCS) $(DEFAULT_FLAGS) -O3 -fuse-linker-plugin -fno-web -fno-gcse -fno-tree-loop-ivcanon -fomit-frame-pointer
+	CFLAGS := $(FLAGS)
+	AFLAGS := -x assembler-with-cpp -Wa,--register-prefix-optional,--bitwise-or $(FLAGS)
+	LIBMD := $(LIB)/libmd.a
+else
+	# release
+	FLAGS := $(INCS) $(DEFAULT_FLAGS) -O3 -fuse-linker-plugin -fno-web -fno-gcse -fno-tree-loop-ivcanon -fomit-frame-pointer -flto -flto=auto -ffat-lto-objects
+	CFLAGS := $(FLAGS)
+	AFLAGS := -x assembler-with-cpp -Wa,--register-prefix-optional,--bitwise-or $(FLAGS)
+	LIBMD := $(LIB)/libmd.a
+endif
 
-#release: FLAGS= $(DEFAULT_FLAGS) -Os -fomit-frame-pointer -fuse-linker-plugin -flto
-release: FLAGS= $(DEFAULT_FLAGS) -O3 -fuse-linker-plugin -fno-web -fno-gcse -fno-unit-at-a-time -fomit-frame-pointer -flto
-release: LIBMD= $(LIB)/libmd.a
-release: pre-build out/rom.bin out/symbol.txt
-#release: $(info $$var is [${SRC_C}])
 
-debug: FLAGS= $(DEFAULT_FLAGS) -O1 -ggdb -DDEBUG=1
-debug: LIBMD= $(LIB)/libmd_debug.a
-debug: pre-build out/rom.bin out/rom.out out/symbol.txt
-
-asm: FLAGS= $(DEFAULT_FLAGS) -O3 -fuse-linker-plugin -fno-web -fno-gcse -fno-unit-at-a-time -fomit-frame-pointer -S
-asm: pre-build $(LSTS)
-
-
-all: release
-default: release
-
-Default: release
-Debug: debug
-Release: release
-Asm: asm
-
+.PHONY: default
+.PHONY: all
+.PHONY: release
+.PHONY: Release
+.PHONY: debug
+.PHONY: Debug
+.PHONY: asm
+.PHONY: Asm
 .PHONY: clean
+.PHONY: clean-release
+.PHONY: clean-debug
+.PHONY: clean-asm
+.PHONY: clean-all
 
-cleantmp:
-	$(RM) -f $(RES_RS)
+default: release
+all: release
 
-cleandep:
-	$(RM) -f $(DEPS)
+# include ext.mk if it exists (better to do it after first / default definition)
+ifneq ("$(wildcard $(GDK)/ext.mk)","")
+    include $(GDK)/ext.mk
+endif
 
-cleanlst:
-	$(RM) -f $(LSTS)
+Release: release
+Debug: debug
+Asm: asm
+clean: clean-all
 
-cleanres: cleantmp
-	$(RM) -f $(RES_H) $(RES_DEP) $(RES_DEPS)
+release: $(OUT_DIR)/rom.bin $(OUT_DIR)/symbol.txt
+release: padROM
+.PHONY: padROM
 
-cleanobj:
-	$(RM) -f $(OBJS) out/sega.o out/rom_head.bin out/rom_head.o out/rom.out
+debug: $(OUT_DIR)/rom.bin $(OUT_DIR)/symbol.txt
+debug: injectSymbolsInROM
+debug: padROM
+.PHONY: injectSymbolsInROM
 
-clean: cleanobj cleanres cleanlst cleandep
-	$(RM) -f out.lst out/cmd_ out/symbol.txt out/rom.nm out/rom.wch out/rom.bin
+asm: $(OBJS) $(LSTS)
 
-cleanrelease: clean
+clean-all:
+	$(RM) -r -f out
 
-cleandebug: clean
+clean-release: clean-task
+clean-debug: clean-task
+clean-asm: clean-task
 
-cleanasm: cleanlst
-
-cleandefault: clean
-cleanDefault: clean
-
-cleanRelease: cleanrelease
-cleanDebug: cleandebug
-cleanAsm: cleanasm
-
-pre-build:
-	$(MKDIR) -p $(SRC)/boot
-	$(MKDIR) -p out
+clean-task:
+	$(RM) -r -f $(OUT_DIR)
+.PHONY: clean-task
 
 
-out/rom.bin: out/rom.out
-	$(OBJCPY) -O binary out/rom.out out/rom.bin
-	$(SIZEBND) out/rom.bin -sizealign 131072 -checksum
+padROM:	$(OUT_DIR)/rom.bin
+	$(SIZEBND) $(OUT_DIR)/rom.bin -sizealign 131072 -checksum
+	@$(CP) $(OUT_DIR)/rom.bin out/rom.bin
 
-out/symbol.txt: out/rom.out
-	$(NM) $(LTO_PLUGIN) -n out/rom.out > out/symbol.txt
+injectSymbolsInROM:	$(OUT_DIR)/rom.bin $(OUT_DIR)/symbol.txt
+	$(CONVSYM) $(OUT_DIR)/symbol.txt $(OUT_DIR)/rom.bin -in txt -inopt " /fmt='%X %*[TtBbCcDd] %511s' /offsetFirst+" -range 0 FFFFFF -a -ref @MDDBG__SymbolDataPtr
 
-out/rom.out: out/sega.o out/cmd_ $(LIBMD)
-	$(CC) -B$(BIN) -n -T $(GDK)/md.ld -nostdlib out/sega.o @out/cmd_ $(LIBMD) $(LIBGCC) -o out/rom.out -Wl,--gc-sections
-	$(RM) out/cmd_
 
-out/cmd_: $(OBJS)
-	$(ECHO) "$(OBJS)" > out/cmd_
+$(OUT_DIR)/rom.bin: $(OUT_DIR)/rom.out $(OUT_DIR)/symbol.txt
+	$(OBJCPY) -O binary $(OUT_DIR)/rom.out $(OUT_DIR)/rom.bin
 
-out/sega.o: $(SRC)/boot/sega.s out/rom_head.bin
-	$(CC) -x assembler-with-cpp $(DEFAULT_FLAGS) -c $(SRC)/boot/sega.s -o $@
+$(OUT_DIR)/symbol.txt: $(OUT_DIR)/rom.out
+	$(NM) $(LTO_PLUGIN) -n -l $(OUT_DIR)/rom.out > $(OUT_DIR)/symbol.txt
 
-out/rom_head.bin: out/rom_head.o
+$(OUT_DIR)/rom.out: $(OUT_DIR)/sega.o $(OUT_DIR)/cmd_ $(LIBMD)
+	@$(MKDIR) -p $(dir $@)
+	$(CC) -m68000 -B$(BIN) -n -T $(GDK)/md.ld -nostdlib $(OUT_DIR)/sega.o @$(OUT_DIR)/cmd_ $(LIBMD) $(LIBGCC) -o $(OUT_DIR)/rom.out -Wl,--gc-sections -flto -flto=auto -ffat-lto-objects
+	@$(RM) $(OUT_DIR)/cmd_
+
+$(OUT_DIR)/cmd_: $(OBJS)
+	@$(MKDIR) -p $(dir $@)
+	$(ECHO) "$(OBJS)" > $(OUT_DIR)/cmd_
+
+# NOTE: sega.s references out/rom_header.bin internally
+$(OUT_DIR)/sega.o: out/rom_header.bin
+	@$(MKDIR) -p $(dir $@)
+	$(CP) $(SRC_LIB)/boot/sega.s $(OUT_DIR)/sega.s
+	$(CC) $(AFLAGS) -c $(OUT_DIR)/sega.s -o $@
+
+# NOTE: rom_head.bin need to be located in 'out' folder as it's referenced by boot/sega.s
+out/rom_header.bin: $(OUT_DIR)/rom_header.o
 	$(OBJCPY) -O binary $< $@
 
-out/rom_head.o: $(SRC)/boot/rom_head.c
-	$(CC) $(DEFAULT_FLAGS) -c $< -o $@
+$(OUT_DIR)/rom_header.o: $(SRC_DIR)/rom_header.c
+	@$(MKDIR) -p $(dir $@)
+	$(CC) $(INCS) $(DEFAULT_FLAGS) -c $< -o $@
 
-$(SRC)/boot/sega.s: $(SRC_LIB)/boot/sega.s
-	$(CP) $< $@
+# SRC_LIB files are "order-only" deps, right of the pipe.  This means we will never overwrite the file in SRC_DIR, even if SRC_LIB is newer.
 
-$(SRC)/boot/rom_head.c: $(SRC_LIB)/boot/rom_head.c
-	$(CP) $< $@
+$(SRC_DIR)/rom_header.c: | $(SRC_LIB)/boot/rom_header.c
+	@$(MKDIR) -p $(dir $@)
+	$(CP) $| $@
 
 
-out/%.lst: %.c
-	$(MKDIR) -p $(dir $@)
-	$(CC) $(FLAGS) -c $< -o $@
+# source / resource compilation
+$(OUT_DIR)/%.o: %.c $(DEP_DIR)/%.d
+	@$(MKDIR) -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
 
-out/%.o: %.c
-	$(MKDIR) -p $(dir $@)
-	$(CC) $(FLAGS) -MMD -c $< -o $@
+$(OUT_DIR)/%.o: %.s $(DEP_DIR)/%.d
+	@$(MKDIR) -p $(dir $@)
+	$(CC) $(AFLAGS) -c $< -o $@
 
-out/%.o: %.s
-	$(MKDIR) -p $(dir $@)
-	$(CC) -x assembler-with-cpp $(FLAGS) -MMD -c $< -o $@
+$(OUT_DIR)/%.o: %.asm
+	@$(MKDIR) -p $(dir $@)
+	$(MACCER) -o $(OUT_DIR)/$*.s $<
+	$(CC) $(AFLAGS) -c $(OUT_DIR)/$*.s -o $@
 
-out/%.o: %.rs
-	$(MKDIR) -p $(dir $@)
-	$(CC) -x assembler-with-cpp $(FLAGS) -c $*.rs -o $@
-	$(CP) $*.d out/$*.d
-	$(RM) $*.d
+$(OUT_DIR)/%.o: %.s80
+	@$(MKDIR) -p $(dir $@)
+	$(ASMZ80) $(Z80_FLAGS) $< $(OUT_DIR)/$*.o80 $(OUT_DIR)/out.lst
+	$(BINTOS) $(OUT_DIR)/$*.o80 $(OUT_DIR)/$*.s
+	$(CC) $(AFLAGS) -c $(OUT_DIR)/$*.s -o $@
 
-%.rs: %.res
-	$(RESCOMP) $*.res $*.rs -dep out/$*.o
+$(OUT_DIR)/%.o: %.res
+	@$(MKDIR) -p $(dir $@)
+	@$(MKDIR) -p $(dir $(DEP_DIR)/$*.d)
+	$(RESCOMP) $< $(OUT_DIR)/$*.s -dep $(OUT_DIR)/$*.o
+	@$(CP) $(OUT_DIR)/$*.d $(DEP_DIR)/$*.d
+	@$(RM) $(OUT_DIR)/$*.d
+	@$(CP) $(OUT_DIR)/$*.h $*.h
+	@$(RM) $(OUT_DIR)/$*.h
+	$(CC) $(AFLAGS) -c $(OUT_DIR)/$*.s -o $@
 
-%.s: %.asm
-	$(MACCER) -o $@ $<
 
-%.o80: %.s80
-	$(ASMZ80) $(FLAGSZ80) $< $@ out.lst
+# listing files
+$(OUT_DIR)/%.lst: %.c $(DEP_DIR)/%.d
+	@$(MKDIR) -p $(dir $@)
+	$(CC) $(CFLAGS) -S -c $< -o $@
 
-%.s: %.o80
-	$(BINTOS) $<
+
+# deps files (we want resource to be generated first)
+$(DEP_DIR)/%.d: %.c $(RES_O)
+	@$(MKDIR) -p $(dir $@)
+	$(CC) $(CFLAGS) $< -E -MG -MM -MP -MT $(OUT_DIR)/$*.o -MF $(DEP_DIR)/$*.d
+
+$(DEP_DIR)/%.d: %.s
+	@$(MKDIR) -p $(dir $@)
+	$(CC) $(AFLAGS) $< -E -MG -MM -MP -MT $(OUT_DIR)/$*.o -MF $(DEP_DIR)/$*.d
+
+
+ifeq ($(CLEAN),FALSE)
+-include $(DEPS)
+endif

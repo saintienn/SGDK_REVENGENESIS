@@ -13,9 +13,10 @@
 //#define MAP_DEBUG
 //#define MAP_PROFIL
 
-
-// we don't want to share it
-extern vu16 VBlankProcess;
+// max screen width = 320   - (320 / 16) = 20
+#define COLUMN_AHEAD    (20 + 1)
+// max screen heigth = 240  - (240 / 16) = 15
+#define ROW_AHEAD       (15 + 1)
 
 
 // forward
@@ -54,7 +55,7 @@ static void getMetaTilemapRect_MTI16_BI8(Map* map, u16 x, u16 y, u16 w, u16 h, u
 static void getMetaTilemapRect_MTI16_BI16(Map* map, u16 x, u16 y, u16 w, u16 h, u16* dest);
 
 
-Map* MAP_create(const MapDefinition* mapDef, VDPPlane plane, u16 baseTile)
+Map* NO_INLINE MAP_create(const MapDefinition* mapDef, VDPPlane plane, u16 baseTile)
 {
     Map* result = allocateMap(mapDef);
 
@@ -98,9 +99,14 @@ Map* MAP_create(const MapDefinition* mapDef, VDPPlane plane, u16 baseTile)
     result->plane = plane;
     // keep only base index and base palette
     result->baseTile = baseTile & (TILE_INDEX_MASK | TILE_ATTR_PALETTE_MASK | TILE_ATTR_PRIORITY_MASK);
-    // mark for init
-    result->planeWidthMask = 0;
-    result->planeHeightMask = 0;
+    // init plane dimension
+    result->planeWidth = planeWidth;
+    result->planeHeight = planeHeight;
+    result->planeWidthMaskAdj = (planeWidth >> 1) - 1;
+    result->planeHeightMaskAdj = (planeHeight >> 1) - 1;
+    result->planeWidthSftAdj = planeWidthSft + 2;
+    // need full update on start
+    result->firstUpdate = TRUE;
 
     // prepare function pointers
     if (mapDef->numMetaTile > 256)
@@ -188,23 +194,23 @@ Map* MAP_create(const MapDefinition* mapDef, VDPPlane plane, u16 baseTile)
         }
     }
 
+    // patch callback
+    result->mapDataPatchCB = NULL;
+
     return result;
 }
 
-void MAP_scrollToEx(Map* map, u32 x, u32 y, bool forceRedraw)
+void MAP_release(Map* map)
 {
-    bool redraw;
+    MEM_free(map);
+}
 
-    // first scroll ?
-    if (map->planeWidthMask == 0)
-    {
-        // init plane dimension
-        map->planeWidthMask = (planeWidth >> 1) - 1;
-        map->planeHeightMask = (planeHeight >> 1) - 1;
-        // force complete redraw
-        redraw = TRUE;
-    }
-    else redraw = forceRedraw;
+
+NO_INLINE void MAP_scrollToEx(Map* map, u32 x, u32 y, bool forceRedraw)
+{
+    bool redraw = forceRedraw || map->firstUpdate;
+
+    map->firstUpdate = FALSE;
 
     if (redraw)
     {
@@ -290,34 +296,34 @@ static void updateMap(Map* map, s16 xt, s16 yt)
 #endif
 
     // clip to 16 metatiles row max (full screen update)
-    if (deltaY > 16)
+    if (deltaY > ROW_AHEAD)
     {
-        cyt += deltaY - 16;
-        deltaY = 16;
+        cyt += deltaY - ROW_AHEAD;
+        deltaY = ROW_AHEAD;
         // as we have a full screen update, we don't need column update then
         deltaX = 0;
     }
     // clip to 16 metatiles row max (full screen update)
-    else if (deltaY < -16)
+    else if (deltaY < -ROW_AHEAD)
     {
-        cyt += deltaY + 16;
-        deltaY = -16;
+        cyt += deltaY + ROW_AHEAD;
+        deltaY = -ROW_AHEAD;
         // as we have a full screen update, we don't need column update then
         deltaX = 0;
     }
     // clip to 21 metatiles column max (full screen update)
-    else if (deltaX > 21)
+    else if (deltaX > COLUMN_AHEAD)
     {
-        cxt += deltaX - 21;
-        deltaX = 21;
+        cxt += deltaX - COLUMN_AHEAD;
+        deltaX = COLUMN_AHEAD;
         // as we have a full screen update, we don't need row update then
         deltaY = 0;
     }
     // clip to 21 metatiles column max (full screen update)
-    else if (deltaX < -21)
+    else if (deltaX < -COLUMN_AHEAD)
     {
-        cxt += deltaX + 21;
-        deltaX = -21;
+        cxt += deltaX + COLUMN_AHEAD;
+        deltaX = -COLUMN_AHEAD;
         // as we have a full screen update, we don't need row update then
         deltaY = 0;
     }
@@ -325,12 +331,12 @@ static void updateMap(Map* map, s16 xt, s16 yt)
     if (deltaX > 0)
     {
         // update on right
-        cxt += 21;
+        cxt += COLUMN_AHEAD;
 
         // need to update map column on right
         while(deltaX--)
         {
-            setMapColumn(map, cxt & map->planeWidthMask, cxt, yt);
+            setMapColumn(map, cxt & map->planeWidthMaskAdj, cxt, yt);
             cxt++;
         }
     }
@@ -340,19 +346,19 @@ static void updateMap(Map* map, s16 xt, s16 yt)
         while(deltaX++)
         {
             cxt--;
-            setMapColumn(map, cxt & map->planeWidthMask, cxt, yt);
+            setMapColumn(map, cxt & map->planeWidthMaskAdj, cxt, yt);
         }
     }
 
     if (deltaY > 0)
     {
         // update on bottom
-        cyt += 16;
+        cyt += ROW_AHEAD;
 
         // need to update map row on bottom
         while(deltaY--)
         {
-            setMapRow(map, cyt & map->planeHeightMask, xt, cyt);
+            setMapRow(map, cyt & map->planeHeightMaskAdj, xt, cyt);
             cyt++;
         }
     }
@@ -362,7 +368,7 @@ static void updateMap(Map* map, s16 xt, s16 yt)
         while(deltaY++)
         {
             cyt--;
-            setMapRow(map, cyt & map->planeHeightMask, xt, cyt);
+            setMapRow(map, cyt & map->planeHeightMaskAdj, xt, cyt);
         }
     }
 
@@ -380,7 +386,7 @@ static void setMapColumn(Map *map, u16 column, u16 x, u16 y)
     u16 start = GET_VCOUNTER;
 #endif
 
-    const u16 ph = planeHeight;
+    const u16 ph = map->planeHeight;
 
     // allocate temp buffer for tilemap
     u16* buf = DMA_allocateTemp(ph * 2);
@@ -396,7 +402,7 @@ static void setMapColumn(Map *map, u16 column, u16 x, u16 y)
     // VRAM destination address
     const u16 vramAddr = ((map->plane == BG_A)?VDP_BG_A:VDP_BG_B) + (column * 4);
     // get plane width * 2
-    const u16 pw2 = planeWidth * 2;
+    const u16 pw2 = map->planeWidth * 2;
 
     // queue DMA (first column)
     DMA_queueDmaFast(DMA_VRAM, buf, vramAddr + 0, ph, pw2);
@@ -409,11 +415,11 @@ static void setMapColumn(Map *map, u16 column, u16 x, u16 y)
 #endif
 
     // 16 metatile = 32 tiles = 256 pixels (full screen height + 16 pixels)
-    const u16 h = 16;
+    const u16 h = ROW_AHEAD;
     // clip Y against plane size
-    const u16 yAdj = y & map->planeHeightMask;
+    const u16 yAdj = y & map->planeHeightMaskAdj;
     // get plane height
-    const u16 ph2 = map->planeHeightMask + 1;
+    const u16 ph2 = map->planeHeightMaskAdj + 1;
 
     // larger than plane height ? --> need to split
     if ((yAdj + h) > ph2)
@@ -439,7 +445,7 @@ static void setMapRow(Map *map, u16 row, u16 x, u16 y)
     u16 start = GET_VCOUNTER;
 #endif
 
-    const u16 pw = planeWidth;
+    const u16 pw = map->planeWidth;
 
     // allocate temp buffer for tilemap
     u16* buf = DMA_allocateTemp(pw * 2);
@@ -453,7 +459,7 @@ static void setMapRow(Map *map, u16 row, u16 x, u16 y)
 #endif
 
     // VRAM destination address
-    const u16 vramAddr = ((map->plane == BG_A)?VDP_BG_A:VDP_BG_B) + (row << (planeWidthSft + 2));
+    const u16 vramAddr = ((map->plane == BG_A)?VDP_BG_A:VDP_BG_B) + (row << map->planeWidthSftAdj);
 
     // queue DMA (first row)
     DMA_queueDmaFast(DMA_VRAM, buf, vramAddr + (pw * 0), pw, 2);
@@ -466,11 +472,11 @@ static void setMapRow(Map *map, u16 row, u16 x, u16 y)
 #endif
 
     // 21 metatile = 42 tiles = 336 pixels (full screen width + 16 pixels)
-    u16 w = 21;
+    u16 w = COLUMN_AHEAD;
     // clip X against plane size
-    const u16 xAdj = x & map->planeWidthMask;
-    // get plane width
-    const u16 pw2 = map->planeWidthMask + 1;
+    const u16 xAdj = x & map->planeWidthMaskAdj;
+    // get plane width (metatile)
+    const u16 pw2 = map->planeWidthMaskAdj + 1;
 
     // larger than plane width ? --> need to split
     if ((xAdj + w) > pw2)
@@ -494,6 +500,13 @@ static void prepareMapDataColumn(Map *map, u16 *bufCol1, u16 *bufCol2, u16 xm, u
 
     map->prepareMapDataColumnCB(map, bufCol1, bufCol2, xm, ym, height);
 
+    // patch data callback set ?
+    if (map->mapDataPatchCB != NULL)
+    {
+        map->mapDataPatchCB(map, bufCol1, (xm * 2) + 0, ym * 2, COLUMN_UPDATE, height * 2);
+        map->mapDataPatchCB(map, bufCol2, (xm * 2) + 1, ym * 2, COLUMN_UPDATE, height * 2);
+    }
+
 #ifdef MAP_PROFIL
     u16 end = GET_VCOUNTER;
     KLog_S2("prepareMapDataColumn - duration=", end - start, " h=", height);
@@ -507,6 +520,13 @@ static void prepareMapDataRow(Map* map, u16 *bufRow1, u16 *bufRow2, u16 xm, u16 
 #endif
 
     map->prepareMapDataRowCB(map, bufRow1, bufRow2, xm, ym, width);
+
+    // patch data callback set ?
+    if (map->mapDataPatchCB != NULL)
+    {
+        map->mapDataPatchCB(map, bufRow1, xm * 2, (ym * 2) + 0, ROW_UPDATE, width * 2);
+        map->mapDataPatchCB(map, bufRow2, xm * 2, (ym * 2) + 1, ROW_UPDATE, width * 2);
+    }
 
 #ifdef MAP_PROFIL
     u16 end = GET_VCOUNTER;
@@ -560,10 +580,8 @@ static void prepareMapDataColumn_MTI8_BI8(Map *map, u16 *bufCol1, u16 *bufCol2, 
         *d1++ = *metaTile++;
         *d2++ = *metaTile;
 
-        // next metatile
-        yi++;
-        // new block ?
-        if (yi == 8)
+        // next metatile Y is a new block ?
+        if (++yi == 8)
         {
             yi = 0;
             // next row
@@ -623,10 +641,8 @@ static void prepareMapDataColumn_MTI8_BI16(Map *map, u16 *bufCol1, u16 *bufCol2,
         *d1++ = *metaTile++;
         *d2++ = *metaTile;
 
-        // next metatile
-        yi++;
-        // new block ?
-        if (yi == 8)
+        // next metatile Y is a new block ?
+        if (++yi == 8)
         {
             yi = 0;
             // next row
@@ -673,7 +689,7 @@ static void prepareMapDataColumn_MTI16_BI8(Map *map, u16 *bufCol1, u16 *bufCol2,
     while(h--)
     {
         // get metatile index
-        u16 metaTileInd = *block & TILE_INDEX_MASK;
+        u16 metaTileInd = *block;
         // next row
         block += 8;
 
@@ -686,10 +702,8 @@ static void prepareMapDataColumn_MTI16_BI8(Map *map, u16 *bufCol1, u16 *bufCol2,
         *d1++ = *metaTile++;
         *d2++ = *metaTile;
 
-        // next metatile
-        yi++;
-        // new block ?
-        if (yi == 8)
+        // next metatile Y is a new block ?
+        if (++yi == 8)
         {
             yi = 0;
             // next row
@@ -736,7 +750,7 @@ static void prepareMapDataColumn_MTI16_BI16(Map *map, u16 *bufCol1, u16 *bufCol2
     while(h--)
     {
         // get metatile index
-        u16 metaTileInd = *block & TILE_INDEX_MASK;
+        u16 metaTileInd = *block;
         // next row
         block += 8;
 
@@ -749,10 +763,8 @@ static void prepareMapDataColumn_MTI16_BI16(Map *map, u16 *bufCol1, u16 *bufCol2
         *d1++ = *metaTile++;
         *d2++ = *metaTile;
 
-        // next metatile
-        yi++;
-        // new block ?
-        if (yi == 8)
+        // next metatile Y is a new block ?
+        if (++yi == 8)
         {
             yi = 0;
             // next row
@@ -815,10 +827,8 @@ static void prepareMapDataColumnEx_MTI8_BI8(Map *map, u16 *bufCol1, u16 *bufCol2
         *d1++ = *metaTile++ + baseAttr;
         *d2++ = *metaTile + baseAttr;
 
-        // next metatile
-        yi++;
-        // new block ?
-        if (yi == 8)
+        // next metatile Y is a new block ?
+        if (++yi == 8)
         {
             yi = 0;
             // next row
@@ -881,10 +891,8 @@ static void prepareMapDataColumnEx_MTI8_BI16(Map *map, u16 *bufCol1, u16 *bufCol
         *d1++ = *metaTile++ + baseAttr;
         *d2++ = *metaTile + baseAttr;
 
-        // next metatile
-        yi++;
-        // new block ?
-        if (yi == 8)
+        // next metatile Y is a new block ?
+        if (++yi == 8)
         {
             yi = 0;
             // next row
@@ -934,7 +942,7 @@ static void prepareMapDataColumnEx_MTI16_BI8(Map *map, u16 *bufCol1, u16 *bufCol
     while(h--)
     {
         // get metatile index
-        u16 metaTileInd = *block & TILE_INDEX_MASK;
+        u16 metaTileInd = *block;
         // next row
         block += 8;
 
@@ -947,10 +955,8 @@ static void prepareMapDataColumnEx_MTI16_BI8(Map *map, u16 *bufCol1, u16 *bufCol
         *d1++ = *metaTile++ + baseAttr;
         *d2++ = *metaTile + baseAttr;
 
-        // next metatile
-        yi++;
-        // new block ?
-        if (yi == 8)
+        // next metatile Y is a new block ?
+        if (++yi == 8)
         {
             yi = 0;
             // next row
@@ -1000,7 +1006,7 @@ static void prepareMapDataColumnEx_MTI16_BI16(Map *map, u16 *bufCol1, u16 *bufCo
     while(h--)
     {
         // get metatile index
-        u16 metaTileInd = *block & TILE_INDEX_MASK;
+        u16 metaTileInd = *block;
         // next row
         block += 8;
 
@@ -1013,10 +1019,8 @@ static void prepareMapDataColumnEx_MTI16_BI16(Map *map, u16 *bufCol1, u16 *bufCo
         *d1++ = *metaTile++ + baseAttr;
         *d2++ = *metaTile + baseAttr;
 
-        // next metatile
-        yi++;
-        // new block ?
-        if (yi == 8)
+        // next metatile Y is a new block ?
+        if (++yi == 8)
         {
             yi = 0;
             // next row
@@ -1071,10 +1075,8 @@ static void prepareMapDataRow_MTI8_BI8(Map* map, u16 *bufRow1, u16 *bufRow2, u16
         *d2++ = *metaTile++;
         *d2++ = *metaTile;
 
-        // next metatile
-        xi++;
-        // new block ?
-        if (xi == 8)
+        // next metatile X is a new block ?
+        if (++xi == 8)
         {
             xi = 0;
             // next column
@@ -1129,10 +1131,8 @@ static void prepareMapDataRow_MTI8_BI16(Map* map, u16 *bufRow1, u16 *bufRow2, u1
         *d2++ = *metaTile++;
         *d2++ = *metaTile;
 
-        // next metatile
-        xi++;
-        // new block ?
-        if (xi == 8)
+        // next metatile X is a new block ?
+        if (++xi == 8)
         {
             xi = 0;
             // next column
@@ -1177,7 +1177,7 @@ static void prepareMapDataRow_MTI16_BI8(Map* map, u16 *bufRow1, u16 *bufRow2, u1
     while(w--)
     {
         // metatile index; next col
-        u16 metaTileInd = *block++ & TILE_INDEX_MASK;
+        u16 metaTileInd = *block++;
         // get metatile pointeur
         u16* metaTile = &map->metaTiles[2 * 2 * metaTileInd];
 
@@ -1187,10 +1187,8 @@ static void prepareMapDataRow_MTI16_BI8(Map* map, u16 *bufRow1, u16 *bufRow2, u1
         *d2++ = *metaTile++;
         *d2++ = *metaTile;
 
-        // next metatile
-        xi++;
-        // new block ?
-        if (xi == 8)
+        // next metatile X is a new block ?
+        if (++xi == 8)
         {
             xi = 0;
             // next column
@@ -1235,7 +1233,7 @@ static void prepareMapDataRow_MTI16_BI16(Map* map, u16 *bufRow1, u16 *bufRow2, u
     while(w--)
     {
         // metatile index; next col
-        u16 metaTileInd = *block++ & TILE_INDEX_MASK;
+        u16 metaTileInd = *block++;
         // get metatile pointeur
         u16* metaTile = &map->metaTiles[2 * 2 * metaTileInd];
 
@@ -1245,10 +1243,8 @@ static void prepareMapDataRow_MTI16_BI16(Map* map, u16 *bufRow1, u16 *bufRow2, u
         *d2++ = *metaTile++;
         *d2++ = *metaTile;
 
-        // next metatile
-        xi++;
-        // new block ?
-        if (xi == 8)
+        // next metatile X is a new block ?
+        if (++xi == 8)
         {
             xi = 0;
             // next column
@@ -1306,10 +1302,8 @@ static void prepareMapDataRowEx_MTI8_BI8(Map* map, u16 *bufRow1, u16 *bufRow2, u
         *d2++ = *metaTile++ + baseAttr;
         *d2++ = *metaTile + baseAttr;
 
-        // next metatile
-        xi++;
-        // new block ?
-        if (xi == 8)
+        // next metatile X is a new block ?
+        if (++xi == 8)
         {
             xi = 0;
             // next column
@@ -1367,10 +1361,8 @@ static void prepareMapDataRowEx_MTI8_BI16(Map* map, u16 *bufRow1, u16 *bufRow2, 
         *d2++ = *metaTile++ + baseAttr;
         *d2++ = *metaTile + baseAttr;
 
-        // next metatile
-        xi++;
-        // new block ?
-        if (xi == 8)
+        // next metatile X is a new block ?
+        if (++xi == 8)
         {
             xi = 0;
             // next column
@@ -1418,7 +1410,7 @@ static void prepareMapDataRowEx_MTI16_BI8(Map* map, u16 *bufRow1, u16 *bufRow2, 
     while(w--)
     {
         // metatile index; next col
-        u16 metaTileInd = *block++ & TILE_INDEX_MASK;
+        u16 metaTileInd = *block++;
         // get metatile pointeur
         u16* metaTile = &map->metaTiles[2 * 2 * metaTileInd];
 
@@ -1428,10 +1420,8 @@ static void prepareMapDataRowEx_MTI16_BI8(Map* map, u16 *bufRow1, u16 *bufRow2, 
         *d2++ = *metaTile++ + baseAttr;
         *d2++ = *metaTile + baseAttr;
 
-        // next metatile
-        xi++;
-        // new block ?
-        if (xi == 8)
+        // next metatile X is a new block ?
+        if (++xi == 8)
         {
             xi = 0;
             // next column
@@ -1479,7 +1469,7 @@ static void prepareMapDataRowEx_MTI16_BI16(Map* map, u16 *bufRow1, u16 *bufRow2,
     while(w--)
     {
         // metatile index; next col
-        u16 metaTileInd = *block++ & TILE_INDEX_MASK;
+        u16 metaTileInd = *block++;
         // get metatile pointeur
         u16* metaTile = &map->metaTiles[2 * 2 * metaTileInd];
 
@@ -1489,10 +1479,8 @@ static void prepareMapDataRowEx_MTI16_BI16(Map* map, u16 *bufRow1, u16 *bufRow2,
         *d2++ = *metaTile++ + baseAttr;
         *d2++ = *metaTile + baseAttr;
 
-        // next metatile
-        xi++;
-        // new block ?
-        if (xi == 8)
+        // next metatile X is a new block ?
+        if (++xi == 8)
         {
             xi = 0;
             // next column
@@ -1515,7 +1503,7 @@ u16 MAP_getMetaTile(Map* map, u16 x, u16 y)
 
 u16 MAP_getTile(Map* map, u16 x, u16 y)
 {
-    u16 metaTileInd = map->getMetaTileCB(map, x / 2, y / 2) & TILE_INDEX_MASK;
+    u16 metaTileInd = map->getMetaTileCB(map, x / 2, y / 2);
     u16* metaTile = &map->metaTiles[2 * 2 * metaTileInd];
     return metaTile[((y & 1) * 2) + (x & 1)];
 }
@@ -1636,27 +1624,28 @@ static void getMetaTilemapRect_MTI8_BI8(Map* map, u16 x, u16 y, u16 w, u16 h, u1
     u8* blockIndexes = map->blockIndexes;
     u8* blocks = map->blocks;
 
-    // start y position inside block
-    u16 yi = y & 7;
-    u16 hi = h;
-
     // block X position
     u16 xb = (x / 8) & map->wMask;
     // block Y position
     u16 yb = (y / 8) & map->hMask;
-    // get first block data pointer
-    u8* block = &blocks[8 * 8 * blockIndexes[map->blockRowOffsets[yb] + xb]];
-    // add Y offset
-    block += yi * 8;
+    // start y position inside block
+    u16 yi = y & 7;
+    u16 hi = h;
 
     // remain metatile ?
     while(hi--)
     {
+        // x block position
+        u16 xbi = xb;
         // start x position inside block
         u16 xi = x & 7;
+        // get block data pointer
+        u8* block = &blocks[8 * 8 * blockIndexes[map->blockRowOffsets[yb] + xbi]];
         u16 wi = w;
 
-        // block start X offset
+        // add Y offset
+        block += yi * 8;
+        // add X offset
         block += xi;
 
         // remain metatile ?
@@ -1665,31 +1654,25 @@ static void getMetaTilemapRect_MTI8_BI8(Map* map, u16 x, u16 y, u16 w, u16 h, u1
             // store metatile attribute; next col
             *dest++ = *block++;
 
-            // next metatile X
-            xi++;
-            // new block ?
-            if (xi == 8)
+            // next metatile X is a new block ?
+            if (++xi == 8)
             {
                 xi = 0;
                 // next column
-                xb = (xb + 1) & map->wMask;
+                xbi = (xbi + 1) & map->wMask;
                 // get block data pointer
-                block = &blocks[8 * 8 * blockIndexes[map->blockRowOffsets[yb] + xb]];
+                block = &blocks[8 * 8 * blockIndexes[map->blockRowOffsets[yb] + xbi]];
                 // add Y offset
                 block += yi * 8;
             }
         }
 
-        // next metatile Y
-        yi++;
-        // new block ?
-        if (yi == 8)
+        // next metatile Y is a new block ?
+        if (++yi == 8)
         {
             yi = 0;
             // next row
             yb = (yb + 1) & map->hMask;
-            // get block data pointer
-            block = &blocks[8 * 8 * blockIndexes[map->blockRowOffsets[yb] + xb]];
         }
     }
 }
@@ -1699,27 +1682,28 @@ static void getMetaTilemapRect_MTI8_BI16(Map* map, u16 x, u16 y, u16 w, u16 h, u
     u16* blockIndexes = map->blockIndexes;
     u8* blocks = map->blocks;
 
-    // start y position inside block
-    u16 yi = y & 7;
-    u16 hi = h;
-
     // block X position
     u16 xb = (x / 8) & map->wMask;
     // block Y position
     u16 yb = (y / 8) & map->hMask;
-    // get first block data pointer
-    u8* block = &blocks[8 * 8 * blockIndexes[map->blockRowOffsets[yb] + xb]];
-    // add Y offset
-    block += yi * 8;
+    // start y position inside block
+    u16 yi = y & 7;
+    u16 hi = h;
 
     // remain metatile ?
     while(hi--)
     {
+        // x block position
+        u16 xbi = xb;
         // start x position inside block
         u16 xi = x & 7;
+        // get first block data pointer
+        u8* block = &blocks[8 * 8 * blockIndexes[map->blockRowOffsets[yb] + xbi]];
         u16 wi = w;
 
-        // block start X offset
+        // add Y offset
+        block += yi * 8;
+        // add X offset
         block += xi;
 
         // remain metatile ?
@@ -1728,31 +1712,25 @@ static void getMetaTilemapRect_MTI8_BI16(Map* map, u16 x, u16 y, u16 w, u16 h, u
             // store metatile attribute; next col
             *dest++ = *block++;
 
-            // next metatile X
-            xi++;
-            // new block ?
-            if (xi == 8)
+            // next metatile X is a new block ?
+            if (++xi == 8)
             {
                 xi = 0;
                 // next column
-                xb = (xb + 1) & map->wMask;
+                xbi = (xbi + 1) & map->wMask;
                 // get block data pointer
-                block = &blocks[8 * 8 * blockIndexes[map->blockRowOffsets[yb] + xb]];
+                block = &blocks[8 * 8 * blockIndexes[map->blockRowOffsets[yb] + xbi]];
                 // add Y offset
                 block += yi * 8;
             }
         }
 
-        // next metatile Y
-        yi++;
-        // new block ?
-        if (yi == 8)
+        // next metatile Y is a new block ?
+        if (++yi == 8)
         {
             yi = 0;
             // next row
             yb = (yb + 1) & map->hMask;
-            // get block data pointer
-            block = &blocks[8 * 8 * blockIndexes[map->blockRowOffsets[yb] + xb]];
         }
     }
 }
@@ -1762,27 +1740,28 @@ static void getMetaTilemapRect_MTI16_BI8(Map* map, u16 x, u16 y, u16 w, u16 h, u
     u8* blockIndexes = map->blockIndexes;
     u16* blocks = map->blocks;
 
-    // start y position inside block
-    u16 yi = y & 7;
-    u16 hi = h;
-
     // block X position
     u16 xb = (x / 8) & map->wMask;
     // block Y position
     u16 yb = (y / 8) & map->hMask;
-    // get first block data pointer
-    u16* block = &blocks[8 * 8 * blockIndexes[map->blockRowOffsets[yb] + xb]];
-    // add Y offset
-    block += yi * 8;
+    // start y position inside block
+    u16 yi = y & 7;
+    u16 hi = h;
 
     // remain metatile ?
     while(hi--)
     {
+        // x block position
+        u16 xbi = xb;
         // start x position inside block
         u16 xi = x & 7;
+        // get first block data pointer
+        u16* block = &blocks[8 * 8 * blockIndexes[map->blockRowOffsets[yb] + xbi]];
         u16 wi = w;
 
-        // block start X offset
+        // add Y offset
+        block += yi * 8;
+        // add X offset
         block += xi;
 
         // remain metatile ?
@@ -1791,31 +1770,25 @@ static void getMetaTilemapRect_MTI16_BI8(Map* map, u16 x, u16 y, u16 w, u16 h, u
             // store metatile attribute; next col
             *dest++ = *block++;
 
-            // next metatile X
-            xi++;
-            // new block ?
-            if (xi == 8)
+            // next metatile X is a new block ?
+            if (++xi == 8)
             {
                 xi = 0;
                 // next column
-                xb = (xb + 1) & map->wMask;
+                xbi = (xbi + 1) & map->wMask;
                 // get block data pointer
-                block = &blocks[8 * 8 * blockIndexes[map->blockRowOffsets[yb] + xb]];
+                block = &blocks[8 * 8 * blockIndexes[map->blockRowOffsets[yb] + xbi]];
                 // add Y offset
                 block += yi * 8;
             }
         }
 
-        // next metatile Y
-        yi++;
-        // new block ?
-        if (yi == 8)
+        // next metatile Y is a new block ?
+        if (++yi == 8)
         {
             yi = 0;
             // next row
             yb = (yb + 1) & map->hMask;
-            // get block data pointer
-            block = &blocks[8 * 8 * blockIndexes[map->blockRowOffsets[yb] + xb]];
         }
     }
 }
@@ -1825,27 +1798,28 @@ static void getMetaTilemapRect_MTI16_BI16(Map* map, u16 x, u16 y, u16 w, u16 h, 
     u16* blockIndexes = map->blockIndexes;
     u16* blocks = map->blocks;
 
-    // start y position inside block
-    u16 yi = y & 7;
-    u16 hi = h;
-
     // block X position
     u16 xb = (x / 8) & map->wMask;
     // block Y position
     u16 yb = (y / 8) & map->hMask;
-    // get first block data pointer
-    u16* block = &blocks[8 * 8 * blockIndexes[map->blockRowOffsets[yb] + xb]];
-    // add Y offset
-    block += yi * 8;
+    // start y position inside block
+    u16 yi = y & 7;
+    u16 hi = h;
 
     // remain metatile ?
     while(hi--)
     {
+        // x block position
+        u16 xbi = xb;
         // start x position inside block
         u16 xi = x & 7;
+        // get first block data pointer
+        u16* block = &blocks[8 * 8 * blockIndexes[map->blockRowOffsets[yb] + xbi]];
         u16 wi = w;
 
-        // block start X offset
+        // add Y offset
+        block += yi * 8;
+        // add X offset
         block += xi;
 
         // remain metatile ?
@@ -1854,31 +1828,88 @@ static void getMetaTilemapRect_MTI16_BI16(Map* map, u16 x, u16 y, u16 w, u16 h, 
             // store metatile attribute; next col
             *dest++ = *block++;
 
-            // next metatile X
-            xi++;
-            // new block ?
-            if (xi == 8)
+            // next metatile X is a new block ?
+            if (++xi == 8)
             {
                 xi = 0;
                 // next column
-                xb = (xb + 1) & map->wMask;
+                xbi = (xbi + 1) & map->wMask;
                 // get block data pointer
-                block = &blocks[8 * 8 * blockIndexes[map->blockRowOffsets[yb] + xb]];
+                block = &blocks[8 * 8 * blockIndexes[map->blockRowOffsets[yb] + xbi]];
                 // add Y offset
                 block += yi * 8;
             }
         }
 
-        // next metatile Y
-        yi++;
-        // new block ?
-        if (yi == 8)
+        // next metatile Y is a new block ?
+        if (++yi == 8)
         {
             yi = 0;
             // next row
             yb = (yb + 1) & map->hMask;
-            // get block data pointer
-            block = &blocks[8 * 8 * blockIndexes[map->blockRowOffsets[yb] + xb]];
+        }
+    }
+}
+
+
+void MAP_setDataPatchCallback(Map* map, MapDataPatchCallback *CB)
+{
+    map->mapDataPatchCB = CB;
+}
+
+
+void MAP_overridePlaneSize(Map* map, u16 w, u16 h)
+{
+    // only 32, 64 or 128 accepted here
+    if (w & 0x80)
+    {
+        map->planeWidth = 128;
+        map->planeWidthMaskAdj = (128 >> 1) - 1;
+        map->planeWidthSftAdj = 7 + 2;
+
+        // plane height fixed to 32
+        map->planeHeight = 32;
+        map->planeHeightMaskAdj = (32 >> 1) - 1;
+    }
+    else if (w & 0x40)
+    {
+        map->planeWidth = 64;
+        map->planeWidthMaskAdj = (64 >> 1) - 1;
+        map->planeWidthSftAdj = 6 + 2;
+
+        // only 64 or 32 accepted for plane height
+        if (h & 0x40)
+        {
+            map->planeHeight = 64;
+            map->planeHeightMaskAdj = (64 >> 1) - 1;
+        }
+        else
+        {
+            map->planeHeight = 32;
+            map->planeHeightMaskAdj = (32 >> 1) - 1;
+        }
+    }
+    else
+    {
+        map->planeWidth = 32;
+        map->planeWidthMaskAdj = (32 >> 1) - 1;
+        map->planeWidthSftAdj = 5 + 2;
+
+        // plane height can be 128, 64 or 32
+        if (h & 0x80)
+        {
+            map->planeHeight = 128;
+            map->planeHeightMaskAdj = (128 >> 1) - 1;
+        }
+        else if (h & 0x40)
+        {
+            map->planeHeight = 64;
+            map->planeHeightMaskAdj = (64 >> 1) - 1;
+        }
+        else
+        {
+            map->planeHeight = 32;
+            map->planeHeightMaskAdj = (32 >> 1) - 1;
         }
     }
 }

@@ -9,7 +9,6 @@
 #include "dma.h"
 #include "vdp_tile.h"
 
-#include "font.h"
 #include "memory.h"
 #include "mapper.h"
 #include "sys.h"
@@ -38,13 +37,13 @@ void VDP_setHorizontalScroll(VDPPlane plane, s16 value)
     u16 addr;
 
     /* Point to vdp port */
-    pw = (u16 *) GFX_DATA_PORT;
-    pl = (u32 *) GFX_CTRL_PORT;
+    pw = (u16 *) VDP_DATA_PORT;
+    pl = (u32 *) VDP_CTRL_PORT;
 
     addr = VDP_HSCROLL_TABLE;
     if (plane == BG_B) addr += 2;
 
-    *pl = GFX_WRITE_VRAM_ADDR((u32) addr);
+    *pl = VDP_WRITE_VRAM_ADDR((u32) addr);
     *pw = value;
 }
 
@@ -92,13 +91,13 @@ void VDP_setVerticalScroll(VDPPlane plane, s16 value)
     u16 addr;
 
     /* Point to vdp port */
-    pw = (u16 *) GFX_DATA_PORT;
-    pl = (u32 *) GFX_CTRL_PORT;
+    pw = (u16 *) VDP_DATA_PORT;
+    pl = (u32 *) VDP_CTRL_PORT;
 
     addr = 0;
     if (plane == BG_B) addr += 2;
 
-    *pl = GFX_WRITE_VSRAM_ADDR((u32) addr);
+    *pl = VDP_WRITE_VSRAM_ADDR((u32) addr);
     *pw = value;
 }
 
@@ -136,32 +135,32 @@ bool VDP_doVBlankScrollProcess()
     u16 addr;
 
     /* Point to vdp port */
-    pw = (u16 *) GFX_DATA_PORT;
-    pl = (u32 *) GFX_CTRL_PORT;
+    pw = (u16 *) VDP_DATA_PORT;
+    pl = (u32 *) VDP_CTRL_PORT;
 
     addr = VDP_HSCROLL_TABLE;
     if (hscroll_update & 1)
     {
-        *pl = GFX_WRITE_VRAM_ADDR((u32) addr);
+        *pl = VDP_WRITE_VRAM_ADDR((u32) addr);
         *pw = hscroll[0];
     }
     addr += 2;
     if (hscroll_update & 2)
     {
-        *pl = GFX_WRITE_VRAM_ADDR((u32) addr);
+        *pl = VDP_WRITE_VRAM_ADDR((u32) addr);
         *pw = hscroll[1];
     }
 
     addr = 0;
     if (vscroll_update & 1)
     {
-        *pl = GFX_WRITE_VSRAM_ADDR((u32) addr);
+        *pl = VDP_WRITE_VSRAM_ADDR((u32) addr);
         *pw = vscroll[0];
     }
     addr += 2;
     if (vscroll_update & 2)
     {
-        *pl = GFX_WRITE_VSRAM_ADDR((u32) addr);
+        *pl = VDP_WRITE_VSRAM_ADDR((u32) addr);
         *pw = vscroll[1];
     }
 
@@ -224,7 +223,7 @@ void VDP_setTextPriority(u16 prio)
     text_basetile |= (prio & 1) << 15;
 }
 
-void VDP_drawTextEx(VDPPlane plane, const char *str, u16 basetile, u16 x, u16 y, TransferMethod tm)
+void VDP_drawTextEx(VDPPlane plane, const char* str, u16 basetile, u16 x, u16 y, TransferMethod tm)
 {
     u16 data[128];
     const u8 *s;
@@ -276,7 +275,7 @@ void VDP_clearTextEx(VDPPlane plane, u16 basetile, u16 x, u16 y, u16 w, Transfer
         len = pw - x;
 
     // prepare the data
-    memsetU16(data, 0, len);
+    memsetU16(data, TILE_FONT_INDEX, len);
 
     // VDP_setTileMapDataRowEx(..) take care of using temporary buffer to build the data so we are ok here
     VDP_setTileMapDataRowEx(plane, data, basetile, y, x, len, tm);
@@ -309,7 +308,7 @@ void VDP_clearTextAreaEx(VDPPlane plane, u16 basetile, u16 x, u16 y, u16 w, u16 
         ha = ph - y;
 
     // prepare the data
-    memsetU16(data, 0, wa);
+    memsetU16(data, TILE_FONT_INDEX, wa);
 
     ya = y;
     i = ha;
@@ -318,7 +317,7 @@ void VDP_clearTextAreaEx(VDPPlane plane, u16 basetile, u16 x, u16 y, u16 w, u16 
         VDP_setTileMapDataRowEx(plane, data, basetile, ya++, x, wa, tm);
 }
 
-void VDP_drawTextBG(VDPPlane plane, const char *str, u16 x, u16 y)
+void VDP_drawTextBG(VDPPlane plane, const char* str, u16 x, u16 y)
 {
     VDP_drawTextEx(plane, str, text_basetile, x, y, CPU);
 }
@@ -343,7 +342,7 @@ void VDP_clearTextBG(VDPPlane plane, u16 x, u16 y, u16 w)
     if (wa > (pw - x))
         wa = pw - x;
 
-    VDP_fillTileMapRect(plane, 0, x, y, wa, 1);
+    VDP_fillTileMapRect(plane, TILE_FONT_INDEX, x, y, wa, 1);
 }
 
 void VDP_clearTextAreaBG(VDPPlane plane, u16 x, u16 y, u16 w, u16 h)
@@ -369,17 +368,48 @@ void VDP_clearTextAreaBG(VDPPlane plane, u16 x, u16 y, u16 w, u16 h)
     if (ha > (ph - y))
         ha = ph - y;
 
-    VDP_fillTileMapRect(plane, 0, x, y, wa, ha);
+    VDP_fillTileMapRect(plane, TILE_FONT_INDEX, x, y, wa, ha);
 }
 
 void VDP_clearTextLineBG(VDPPlane plane, u16 y)
 {
-    VDP_fillTileMapRect(plane, 0, 0, y, (plane == WINDOW)?windowWidth:planeWidth, 1);
+    VDP_fillTileMapRect(plane, TILE_FONT_INDEX, 0, y, (plane == WINDOW)?windowWidth:planeWidth, 1);
 }
 
-void VDP_drawText(const char *str, u16 x, u16 y)
+void VDP_drawText(const char* str, u16 x, u16 y)
 {
     VDP_drawTextBG(text_plan, str, x, y);
+}
+
+void VDP_drawTextBGFill(VDPPlane plane, const char* str, u16 x, u16 y, u16 len)
+{
+    char fixedStr[len + 1];
+    char* dst = fixedStr;
+    const char* src;
+
+    src = str;
+    // copy str
+    while ((*dst++ = *src++));
+    // revert '\0' terminator
+    --dst;
+
+    u16 strSize = dst - fixedStr;
+    // remaining space to fill ?
+    if (strSize < len)
+    {
+        // append space chars
+        u16 fill = len - strSize;
+        while(fill--) *dst++ = ' ';
+    }
+    // set back terminator char
+    *dst = '\0';
+
+    VDP_drawTextBG(plane, fixedStr, x, y);
+}
+
+void VDP_drawTextFill(const char* str, u16 x, u16 y, u16 len)
+{
+    VDP_drawTextBGFill(text_plan, str, x, y, len);
 }
 
 void VDP_clearText(u16 x, u16 y, u16 w)
