@@ -38,6 +38,11 @@ void VDP_loadFontData(const u32 *font, u16 length, TransferMethod tm)
 
 bool VDP_loadTileSet(const TileSet *tileset, u16 index, TransferMethod tm)
 {
+    return VDP_loadTileSetEx(tileset, index, 0, tileset->numTile, tm);
+}
+
+bool VDP_loadTileSetEx(const TileSet *tileset, u16 index, u16 fromTile, u16 count, TransferMethod tm)
+{
     // compressed tileset ?
     if (tileset->compression != COMPRESSION_NONE)
     {
@@ -46,17 +51,23 @@ bool VDP_loadTileSet(const TileSet *tileset, u16 index, TransferMethod tm)
 
         if (t == NULL) return FALSE;
 
+#if (LIB_LOG_LEVEL >= LOG_LEVEL_WARNING)
+        if (tm == DMA_QUEUE)
+            kprintf("VDP_loadTileSetEx warning: unsafe use of DMA_QUEUE with compressed tileset, use unpacked tileset or DMA_QUEUE_COPY instead.");
+#endif
+
         // tiles
-        VDP_loadTileData(t->tiles, index, t->numTile, tm);
+        VDP_loadTileData(t->tiles + (fromTile * 8), index, count, tm);
         // be careful, we are releasing buffer here so DMA_QUEUE transfer isn't safe here, use DMA_QUEUE_COPY instead for safe operation
         MEM_free(t);
     }
     else
         // tiles
-        VDP_loadTileData(FAR_SAFE(tileset->tiles, tileset->numTile * 32), index, tileset->numTile, tm);
+        VDP_loadTileData(FAR_SAFE(tileset->tiles + (fromTile * 8), count * 32), index, count, tm);
 
     return TRUE;
 }
+
 
 bool VDP_loadFont(const TileSet *font, TransferMethod tm)
 {
